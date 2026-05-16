@@ -6,6 +6,29 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     // 1. NOISE SANITIZATION
     $content.find('style, script, aside.secondary-content, .p-article-byline, .p-article-header, .p-article-header-mobile, .p-article-header-full, .p-article-header-desktop, #comments, .comments, .b-comments').remove();
 
+    // 1.5 THE COMMENT GUILLOTINE
+    // Completely slices off the Comments section and any forum discussion that follows it.
+    const $commentsHeader = $content.find('h1, h2, h3, h4, h5, h6, header').filter((_, el) => {
+        return $(el).text().trim().toLowerCase() === 'comments';
+    });
+
+    if ($commentsHeader.length > 0) {
+        let $target = $commentsHeader.first();
+        // Climb up the DOM tree until we find the direct child of our main $content wrapper
+        while ($target.parent().length > 0 && $target.parent()[0] !== $content[0]) {
+            $target = $target.parent();
+        }
+        // Slice off the comments and everything after it
+        $target.nextAll().remove();
+        $target.remove();
+    }
+
+    // Secondary pass to destroy any lingering DDB Terms of Service forum warnings
+    $content.find('p, div, span, strong, em').filter((_, el) => {
+        const text = $(el).text().toLowerCase();
+        return text.includes('when posting, please be sure') && text.includes('terms of service');
+    }).remove();
+
     // 2. ACTION ICONS (2024 Redesign Fix)
     $content.find('.ddb-action-icon--action, [data-original-title="Action"], [aria-label="Action"]').replaceWith(' <strong>[Action]</strong> ');
     $content.find('.ddb-action-icon--bonus-action, [data-original-title="Bonus Action"], [aria-label="Bonus Action"]').replaceWith(' <strong>[Bonus Action]</strong> ');
@@ -13,7 +36,6 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     $content.find('.ddb-action-icon--legendary-action, [data-original-title="Legendary Action"], [aria-label="Legendary Action"]').replaceWith(' <strong>[Legendary Action]</strong> ');
 
     // 3. THE FOOTNOTE INLINER (The "Unresolved Pointer" Fix)
-    // Hunts down dangling asterisks at the bottom of spells and prepares them for inlining
     let footnoteText = "";
     $content.find('p, div, span, em, i, li').each((_, el) => {
         const $el = $(el);
