@@ -1,5 +1,11 @@
+// Load variables from .env file into process.env
+require('dotenv').config();
+
+// Access the secrets anywhere below
+const cobaltSecret = process.env.COBALTSESSION;
+
 // config.cjs
 module.exports = {
   // Configuration for the downloader
-  cobaltSession: 'eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..XQlflPASPQ-gHSGIGXvPog.mRyVTN4XKp9ZO5EFrH7lOWYHICWLi6amAuU79wH53be-iVGiibbhG1GPRxicuLN6.-anr6Jd1lheLyPe1DNgD6g' // Get this from browser cookies
+  cobaltSession: cobaltSecret // Get this from browser cookies
 };
