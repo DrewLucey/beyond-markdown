@@ -3,7 +3,7 @@
  * Handles DOM surgery to ensure technical fidelity before Markdown conversion.
  */
 export function processContent($, $content, sectionUrl, category = 'GENERAL') {
-    // 1. NOISE SANITIZATION
+    // 1. NOISE SANITIZATION (Preserves .artist-credit for Step 6)
     $content.find('style, script, aside.secondary-content, .p-article-byline, .p-article-header, .p-article-header-mobile, .p-article-header-full, .p-article-header-desktop, #comments, .comments, .b-comments').remove();
 
     // 1.5 THE COMMENT GUILLOTINE
@@ -14,16 +14,13 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
 
     if ($commentsHeader.length > 0) {
         let $target = $commentsHeader.first();
-        // Climb up the DOM tree until we find the direct child of our main $content wrapper
         while ($target.parent().length > 0 && $target.parent()[0] !== $content[0]) {
             $target = $target.parent();
         }
-        // Slice off the comments and everything after it
         $target.nextAll().remove();
         $target.remove();
     }
 
-    // Secondary pass to destroy any lingering DDB Terms of Service forum warnings
     $content.find('p, div, span, strong, em').filter((_, el) => {
         const text = $(el).text().toLowerCase();
         return text.includes('when posting, please be sure') && text.includes('terms of service');
@@ -87,9 +84,17 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         }
     });
 
-    // 5. ADVENTURE MUNCHER UPGRADES
-    $content.find('.compendium-blockquote, .p-article-blockquote, .admin-block').each((_, el) => {
+    // 5. ADVENTURE MUNCHER UPGRADES (Updated to catch 2024 Sidebars)
+    const blockquoteSelectors = [
+        '.compendium-blockquote', 
+        '.p-article-blockquote', 
+        '.admin-block',
+        'aside' // Safely catches HTML5 Rule Sidebars and Read-Aloud text
+    ];
+    
+    $content.find(blockquoteSelectors.join(', ')).each((_, el) => {
         const $el = $(el);
+        // Promotes the sidebar into a blockquote so it survives Markdown conversion
         $el.replaceWith(`<blockquote>${$el.html()}</blockquote>`);
     });
 
@@ -107,7 +112,24 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
 
     $content.find('a:contains("View Cover Art")').remove();
 
-    // 6. SUBSTANCE SCRUBBER
+    // 6. ARTIST CREDIT PRESERVATION (Atomic Binding)
+    $content.find('.artist-credit').each((_, el) => {
+        const $el = $(el);
+        const artistName = $el.text().trim();
+        
+        if (artistName) {
+            const $img = $el.closest('figure, .compendium-art, div').find('img').first();
+            if ($img.length > 0) {
+                const currentAlt = $img.attr('alt') || $img.attr('title') || 'Image';
+                if (!currentAlt.includes('Artist:')) {
+                    $img.attr('alt', `${currentAlt} (Artist: ${artistName})`);
+                }
+            }
+        }
+        $el.remove(); 
+    });
+
+    // 7. SUBSTANCE SCRUBBER
     while ($content.contents().length > 0) {
         const first = $content.contents().first();
         const hasText = first.text().replace(/\u00A0/g, ' ').trim().length > 0;
@@ -117,7 +139,7 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         first.remove();
     }
 
-    // 7. HEADER DE-DUPLICATION
+    // 8. HEADER DE-DUPLICATION
     const h1 = $content.find('h1').first();
     if (h1.length > 0) {
         const h1Text = h1.text().replace(/\u00A0/g, ' ').trim().toLowerCase();
@@ -129,10 +151,7 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         });
     }
 
-    // 8. UNIVERSAL STAT BLOCK SURGERY (Unrestricted by category)
-    // A. Attribute Grid (STR, DEX, CON) - AI Optimized Format
-
-    // Format 1: Compendium & Adventure Sourcebooks (.mon-stat-block__attributes)
+    // 9. UNIVERSAL STAT BLOCK SURGERY
     $content.find('.mon-stat-block__attributes').each((_, el) => {
         const $attrBlock = $(el);
         let attributesHtml = '';
@@ -153,7 +172,6 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         }
     });
 
-    // Format 2: Standalone Monster Database Pages (.ability-block)
     $content.find('.ability-block').each((_, el) => {
         const $attrBlock = $(el);
         let attributesHtml = '';
@@ -174,7 +192,6 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         }
     });
 
-    // B. Section Headers (Traits, Actions, Bonus Actions, Legendary Actions)
     const headerSelectors = [
         '.mon-stat-block__description-block-heading', 
         '.mon-stat-block__description-heading', 
@@ -187,7 +204,7 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         $el.replaceWith(`<h3>${$el.text().trim()}</h3>`);
     });
 
-    // 9. TABLE PRE-PROCESSING & FLATTENING
+    // 10. TABLE PRE-PROCESSING & FLATTENING
     $content.find('table').each((_, table) => {
         const $table = $(table);
         const $caption = $table.find('caption');
@@ -244,7 +261,7 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         $table.replaceWith($newTable);
     });
 
-    // 10. LINK RESOLUTION
+    // 11. LINK RESOLUTION
     $content.find('a, img').each((_, el) => {
         const attr = $(el).is('a') ? 'href' : 'src';
         const val = $(el).attr(attr);
