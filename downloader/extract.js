@@ -23,6 +23,14 @@ const turndownService = new TurndownService({
 });
 turndownService.use(gfm);
 
+// FORCE DOUBLE-TILDE STRIKETHROUGH
+turndownService.addRule('strikethrough', {
+    filter: ['del', 's', 'strike'],
+    replacement: function (content) {
+        return '~~' + content + '~~';
+    }
+});
+
 // Rule: Capture Heading IDs
 turndownService.addRule('headingIds', {
     filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
