@@ -3,11 +3,19 @@
  * Handles DOM surgery to ensure technical fidelity before Markdown conversion.
  */
 export function processContent($, $content, sectionUrl, category = 'GENERAL') {
-    // 1. NOISE SANITIZATION (Preserves .artist-credit for Step 6)
+    // 1. NOISE SANITIZATION
     $content.find('style, script, aside.secondary-content, .p-article-byline, .p-article-header, .p-article-header-mobile, .p-article-header-full, .p-article-header-desktop, #comments, .comments, .b-comments').remove();
 
+    // 1.2 ACCESSIBILITY SCRUBBER
+    // Removes screen-reader specific text that becomes redundant in Markdown
+    $content.find('.visually-hidden, .sr-only').each((_, el) => {
+        const $el = $(el);
+        if ($el.text().trim().toLowerCase().includes('crossed-out')) {
+            $el.remove();
+        }
+    });
+
     // 1.5 THE COMMENT GUILLOTINE
-    // Completely slices off the Comments section and any forum discussion that follows it.
     const $commentsHeader = $content.find('h1, h2, h3, h4, h5, h6, header').filter((_, el) => {
         return $(el).text().trim().toLowerCase() === 'comments';
     });
@@ -26,13 +34,13 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         return text.includes('when posting, please be sure') && text.includes('terms of service');
     }).remove();
 
-    // 2. ACTION ICONS (2024 Redesign Fix)
+    // 2. ACTION ICONS
     $content.find('.ddb-action-icon--action, [data-original-title="Action"], [aria-label="Action"]').replaceWith(' <strong>[Action]</strong> ');
     $content.find('.ddb-action-icon--bonus-action, [data-original-title="Bonus Action"], [aria-label="Bonus Action"]').replaceWith(' <strong>[Bonus Action]</strong> ');
     $content.find('.ddb-action-icon--reaction, [data-original-title="Reaction"], [aria-label="Reaction"]').replaceWith(' <strong>[Reaction]</strong> ');
     $content.find('.ddb-action-icon--legendary-action, [data-original-title="Legendary Action"], [aria-label="Legendary Action"]').replaceWith(' <strong>[Legendary Action]</strong> ');
 
-    // 3. THE FOOTNOTE INLINER (The "Unresolved Pointer" Fix)
+    // 3. THE FOOTNOTE INLINER
     let footnoteText = "";
     $content.find('p, div, span, em, i, li').each((_, el) => {
         const $el = $(el);
@@ -67,7 +75,7 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         });
     }
 
-    // 4. AI-OPTIMIZED STATBLOCK FORMATTER (**Label:** Value)
+    // 4. AI-OPTIMIZED STATBLOCK FORMATTER
     $content.find(statBlockWrappers.join(', ')).each((_, el) => {
         const $el = $(el);
         const $label = $el.find('[class*="-label"]');
@@ -84,17 +92,28 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         }
     });
 
-    // 5. ADVENTURE MUNCHER UPGRADES (Updated to catch 2024 Sidebars)
+    // 5. ADVENTURE MUNCHER UPGRADES
     const blockquoteSelectors = [
         '.compendium-blockquote', 
         '.p-article-blockquote', 
         '.admin-block',
-        'aside' // Safely catches HTML5 Rule Sidebars and Read-Aloud text
+        'aside'
     ];
     
     $content.find(blockquoteSelectors.join(', ')).each((_, el) => {
         const $el = $(el);
-        // Promotes the sidebar into a blockquote so it survives Markdown conversion
+
+        const $firstChild = $el.children().first();
+        if ($firstChild.length > 0 && $firstChild[0].tagName.toLowerCase() === 'p') {
+            const text = $firstChild.text().trim();
+            const wordCount = text.split(/\s+/).length;
+            const endsWithPunctuation = /[.!?]$/.test(text);
+            
+            if (wordCount <= 12 && !endsWithPunctuation && text.length > 0) {
+                $firstChild.replaceWith(`<h4>${$firstChild.html()}</h4>`);
+            }
+        }
+
         $el.replaceWith(`<blockquote>${$el.html()}</blockquote>`);
     });
 
@@ -105,29 +124,58 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         if (highResUrl) $a.replaceWith(`<img src="${highResUrl}" alt="${altText}">`);
     });
 
+    // --- NESTED BOLD PREVENTER ---
     $content.find('.tooltip-hover, .m-spell-hover, .monster-tooltip, .magic-item-tooltip, .rollable').each((_, el) => {
         const $el = $(el);
-        $el.replaceWith(`<strong>${$el.text().trim()}</strong>`);
+        // If already inside a strong tag or header, just return the text to prevent ****Nested**
+        if ($el.closest('strong, b, h1, h2, h3, h4, h5, h6').length > 0) {
+            $el.replaceWith($el.text().trim());
+        } else {
+            $el.replaceWith(`<strong>${$el.text().trim()}</strong>`);
+        }
     });
 
     $content.find('a:contains("View Cover Art")').remove();
 
-    // 6. ARTIST CREDIT PRESERVATION (Atomic Binding)
-    $content.find('.artist-credit').each((_, el) => {
-        const $el = $(el);
-        const artistName = $el.text().trim();
+    // 6. IMAGE METADATA BINDING
+    $content.find('figure, .compendium-art').each((_, el) => {
+        const $wrapper = $(el);
+        const $img = $wrapper.find('img').first();
         
-        if (artistName) {
-            const $img = $el.closest('figure, .compendium-art, div').find('img').first();
-            if ($img.length > 0) {
-                const currentAlt = $img.attr('alt') || $img.attr('title') || 'Image';
-                if (!currentAlt.includes('Artist:')) {
-                    $img.attr('alt', `${currentAlt} (Artist: ${artistName})`);
-                }
+        if ($img.length > 0) {
+            let altParts = [];
+            
+            const $caption = $wrapper.find('figcaption');
+            if ($caption.length > 0) {
+                const text = $caption.text().replace(/\s+/g, ' ').trim();
+                if (text) altParts.push(text);
+                $caption.remove(); 
+            }
+            
+            const $artist = $wrapper.find('.artist-credit');
+            if ($artist.length > 0) {
+                const text = $artist.text().replace(/\s+/g, ' ').trim();
+                if (text) altParts.push(`(Artist: ${text})`);
+                $artist.remove(); 
+            }
+
+            if (altParts.length === 0 || (altParts.length === 1 && altParts[0].startsWith('(Artist:'))) {
+                 let baseAlt = $img.attr('alt') || $img.attr('title') || '';
+                 baseAlt = baseAlt.trim();
+                 if (baseAlt && baseAlt !== 'Image') {
+                     altParts.unshift(baseAlt);
+                 }
+            }
+
+            if (altParts.length > 0) {
+                $img.attr('alt', altParts.join(' '));
+            } else {
+                $img.attr('alt', 'Image'); 
             }
         }
-        $el.remove(); 
     });
+
+    $content.find('.artist-credit, figcaption').remove();
 
     // 7. SUBSTANCE SCRUBBER
     while ($content.contents().length > 0) {
@@ -202,6 +250,82 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     $content.find(headerSelectors.join(', ')).each((_, el) => {
         const $el = $(el);
         $el.replaceWith(`<h3>${$el.text().trim()}</h3>`);
+    });
+
+    // 9.5. SINGLE-COLUMN "CARD" TABLE UNWRAPPER
+    $content.find('table').each((_, table) => {
+        const $table = $(table);
+        const $ths = $table.find('th');
+        const $tds = $table.find('td');
+
+        if ($ths.length === 1 && $tds.length === 1) {
+            const title = $ths.text().trim();
+            const $cell = $tds.first();
+
+            $cell.find('strong').each((_, el) => {
+                const $strong = $(el);
+                $strong.find('br').remove();
+                let text = $strong.text().trim();
+                
+                if (text && !text.endsWith(':')) {
+                    $strong.text(text + ': ');
+                } else if (text) {
+                    $strong.text(text + ' ');
+                }
+            });
+
+            let cellHtml = $cell.html() || '';
+            cellHtml = cellHtml.replace(/<\/strong>\s*<br\s*\/?>/gi, '</strong> ');
+            cellHtml = cellHtml.replace(/<br\s*\/?>/gi, '</p><p>');
+            cellHtml = cellHtml.replace(/<p>\s*<\/p>/gi, '');
+
+            $table.replaceWith(`<div>\n<p><strong>${title}</strong></p>\n<p>${cellHtml}</p>\n</div>`);
+        }
+    });
+
+    // 9.75 PSEUDO-LIST CONVERTER (.hangingIndent)
+    $content.find('div.hangingIndent, div.condensed-group.hangingIndent').each((_, el) => {
+        const $div = $(el);
+        const $children = $div.children('p, div');
+        
+        if ($children.length > 0) {
+            const $ul = $('<ul></ul>');
+            $children.each((_, child) => {
+                const $child = $(child);
+                let content = $child.html() || '';
+                
+                content = content.replace(/&nbsp;|\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+                
+                if (content) {
+                    $ul.append(`<li>${content}</li>`);
+                }
+            });
+            $div.replaceWith($ul);
+        }
+    });
+
+    // 9.8 ORPHANED LIST TUCKER 
+    $content.find('ol > ul, ol > ol, ul > ul, ul > ol').each((_, sublist) => {
+        const $sublist = $(sublist);
+        const $prevLi = $sublist.prev('li');
+        if ($prevLi.length > 0) {
+            $prevLi.append($sublist);
+        }
+    });
+
+    // 9.85 CONDENSED GROUP TIGHTENER (The Double-Newline Fix)
+    // Flattens paragraphs inside non-list .condensed-group divs into a single 
+    // paragraph separated by <br> so Turndown stacks them tightly.
+    $content.find('div.condensed-group:not(.hangingIndent)').each((_, el) => {
+        const $div = $(el);
+        const $children = $div.children('p');
+        if ($children.length > 0) {
+            let combinedHtml = [];
+            $children.each((_, p) => {
+                combinedHtml.push($(p).html().trim());
+            });
+            $div.replaceWith(`<p>${combinedHtml.join('<br>')}</p>`);
+        }
     });
 
     // 10. TABLE PRE-PROCESSING & FLATTENING
