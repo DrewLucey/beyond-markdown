@@ -1,3 +1,6 @@
+# Secrets and Variables, ex. CobaltSession Cookie
 .env
-sources/
+# User will need to run `npm install` to get the dependencies
 node_modules/
+# Omit Extracted Source Files
+sources/

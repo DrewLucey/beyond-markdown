@@ -16,11 +16,24 @@ const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// 1. Load Authentication
 const configPath = path.resolve(__dirname, '../config.cjs');
 const config = require(configPath);
 
-const turndownService = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+// 2. Initialize Turndown
+const turndownService = new TurndownService({ 
+    headingStyle: 'atx', 
+    codeBlockStyle: 'fenced' 
+});
 turndownService.use(gfm);
+
+// --- THE STRIKETHROUGH OVERRIDE ---
+turndownService.addRule('strikethrough', {
+    filter: ['del', 's', 'strike'],
+    replacement: function (content) {
+        return '~~' + content + '~~';
+    }
+});
 
 // Rule: Capture Heading IDs (Sync with extract.js)
 turndownService.addRule('headingIds', {
@@ -31,113 +44,138 @@ turndownService.addRule('headingIds', {
         const id = node.getAttribute('id');
         const cleanContent = content.replace(/\[\]\(.*?\)/g, '').trim();
         return id 
-            ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n` 
+            ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n`
             : `\n\n${prefix} ${cleanContent}\n\n`;
     }
 });
 
-// Rule: Clean Blockquote Formatting for Read-Aloud Text
-turndownService.addRule('blockquotes', {
-    filter: 'blockquote',
-    replacement: function (content) {
-        content = content.replace(/^\n+|\n+$/g, '');
-        content = content.replace(/^/gm, '> ');
-        return `\n\n${content}\n\n`;
+// Rule: Strip Empty Tooltips
+turndownService.addRule('emptyTooltips', {
+    filter: 'a',
+    replacement: function(content, node) {
+        const href = node.getAttribute('href');
+        if (href && (href.startsWith('#') || href.includes('tooltip'))) {
+            return content.trim(); 
+        }
+        return `[${content}](${href})`;
     }
 });
 
-const CATEGORY_MAP = {
-    'spells': 'SPELL',
-    'monsters': 'MONSTER',
-    'magic-items': 'MAGIC_ITEM',
-    'equipment': 'EQUIPMENT',
-    'feats': 'FEAT',
-    'species': 'SPECIES',
-    'backgrounds': 'BACKGROUND'
-};
+// 3. API Execution Wrapper
+async function runBulkPipeline() {
+    const args = process.argv.slice(2);
+    if (args.length === 0) {
+        console.error("Usage: node bulk_extract.js <CATEGORY>");
+        console.error("Example: node bulk_extract.js feats");
+        process.exit(1);
+    }
 
-const TARGET_PATH = process.argv[2] || '/spells'; 
+    // --- NEW: SANITIZE USER INPUT ---
+    let rawInput = args[0].trim();
+    // Automatically adds a leading slash if you didn't type one
+    const targetPath = rawInput.startsWith('/') ? rawInput : '/' + rawInput;
+    // Strips the slash for naming your folders and categories securely
+    const categoryName = targetPath.replace(/[^a-zA-Z0-9_-]/g, '');
+    // --------------------------------
 
-async function runBulkExtraction(targetPath) {
-    const categoryPathPart = targetPath.split('/').filter(Boolean)[0];
-    const category = CATEGORY_MAP[categoryPathPart] || 'GENERAL';
-    const outputDir = path.resolve(__dirname, '../sources/repositories', category.toLowerCase());
+    const outputDir = path.join(__dirname, '..', 'sources', 'repositories', categoryName);
+
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    console.log(`\n--- Starting Bulk Extract for ${categoryName.toUpperCase()} ---`);
+    console.log(`📁 Output Directory: ${outputDir}`);
     
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-
-    console.log(`--- Starting Bulk Extract for ${targetPath.toUpperCase()} ---`);
-
-    // 1. Pagination Loop
     let currentPage = 1;
     let hasNext = true;
 
+    // --- ROBUST AUTH & HEADERS ---
+    // Safely resolve the token whether it's in config or directly in process.env
+    const sessionToken = config.cobaltSession || config.DNDBEYOND_COBALT_SESSION || process.env.COBALTSESSION || '';
+    const reqHeaders = { 
+        'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '',
+        // Full User-Agent required to bypass Cloudflare anti-bot checks
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
+    };
+
     while (hasNext) {
         console.log(`\nScouting Page ${currentPage}...`);
-        const listUrl = `https://www.dndbeyond.com${targetPath}?page=${currentPage}`;
-        let response;
-        try {
-            response = await axios.get(listUrl, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
-        } catch (e) {
-            console.error(`Failed to load page ${currentPage}: ${e.message}`);
-            break;
-        }
+        const pageUrl = `https://www.dndbeyond.com${targetPath}?page=${currentPage}`;
         
-        const $ = cheerio.load(response.data);
+        try {
+            const res = await axios.get(pageUrl, { headers: reqHeaders });
+            const $ = cheerio.load(res.data);
+            const items = [];
 
-        const items = [];
-        $('.list-row, .info, .monster-name').find('a.link').each((_, el) => {
-            const href = $(el).attr('href');
-            if (href && href.startsWith(targetPath + '/')) {
-                items.push({ name: $(el).text().trim(), url: `https://www.dndbeyond.com${href}` });
-            }
-        });
-
-        if (items.length === 0) {
-            console.log("No items found on this page. Ending pagination.");
-            break;
-        }
-
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
+            // --- THE ANCHOR SCAVENGER ---
+            // Hunts for links by URL pattern instead of CSS classes (Resilient to UI updates)
+            const categoryBase = `${targetPath}/`; // e.g., '/feats/'
             
-            // Junk filter
-            if (item.name.toLowerCase().includes('test') || item.name.toLowerCase().includes('copy_of')) continue;
-
-            process.stdout.write(`\r[Page ${currentPage}] Extracting: ${item.name.substring(0, 40).padEnd(40)}`);
-
-            try {
-                const res = await axios.get(item.url, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
+            $('a').each((_, el) => {
+                let name = $(el).text().replace(/\s+/g, ' ').trim();
+                let url = $(el).attr('href');
                 
-                // Marketplace Redirection Check
-                if (res.request.res.responseUrl.includes('marketplace.dndbeyond.com')) {
-                    console.log(`\n  > Skipped (Unowned): ${item.name}`);
+                // If it's a link to an item in our target category (e.g. /feats/123-alert)
+                if (url && url.startsWith(categoryBase) && url.length > categoryBase.length) {
+                    
+                    // Ignore pagination links, comments, and marketplace redirects
+                    if (url.includes('?') || url.includes('#') || url.includes('/marketplace/')) return;
+                    
+                    // Ignore empty links or icon-only links
+                    if (!name || name.length < 2) return; 
+                    
+                    if (!url.startsWith('http')) url = 'https://www.dndbeyond.com' + url;
+                    
+                    // Deduplicate (DDB often renders desktop/mobile lists twice in the DOM)
+                    if (!items.find(i => i.url === url)) {
+                        items.push({ name, url });
+                    }
+                }
+            });
+
+            if (items.length === 0) {
+                console.log(`  ! No items found on this page. (If unexpected, DDB HTML may have changed or Cloudflare blocked the request)`);
+            }
+
+            for (const item of items) {
+                console.log(`[Page ${currentPage}] Extracting: ${item.name}`);
+                
+                // Fast-fail if the URL is blatantly a marketplace link
+                if (item.url.includes('/marketplace/')) {
+                    console.log(`  > Skipped (Unowned): ${item.name}`);
                     continue;
                 }
 
-                const $s = cheerio.load(res.data);
-                
-                // --- THE WRAPPER FIX ---
-                const contentSelectors = [
-                    '.monster-details',
-                    '.magic-item-details',
-                    '.equipment-details',
-                    '.spell-details',
-                    '.details',
-                    '.mon-stat-block',
-                    '.p-article-content'
-                ];
-                
-                let $content = null;
-                for (const selector of contentSelectors) {
-                    const found = $s(selector);
-                    if (found.length > 0) {
-                        $content = found.first();
-                        break;
-                    }
-                }
+                try {
+                    const itemRes = await axios.get(item.url, { headers: reqHeaders });
 
-                if ($content && $content.length > 0) {
-                    // Pass category to handlers.js so it knows to run monster/spell specific surgery
+                    // Check if DDB secretly redirected us to the marketplace due to lack of ownership
+                    if (itemRes.request.res.responseUrl.includes('/marketplace/')) {
+                        console.log(`  > Skipped (Unowned Redirect): ${item.name}`);
+                        continue;
+                    }
+
+                    const $s = cheerio.load(itemRes.data);
+                    let $content = null;
+                    const selectors = ['.page-content', '.p-article-content', '.primary-content', 'main', 'article', '.container', '.details-container'];
+                    
+                    for (const sel of selectors) {
+                        const found = $s(sel);
+                        if (found.length > 0) { 
+                            $content = found.first(); 
+                            break; 
+                        }
+                    }
+
+                    if (!$content) {
+                        console.log(`  > Skipped (No valid content container found)`);
+                        continue;
+                    }
+
+                    const category = categoryName.toUpperCase();
                     const cleanHtml = processContent($s, $content, item.url, category);
 
                     if (cleanHtml) {
@@ -145,30 +183,33 @@ async function runBulkExtraction(targetPath) {
                         
                         // --- THE ASTERISK FIX ---
                         markdown = markdown.replace(/\\\*/g, '*'); 
-                        
                         markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
 
                         // ENVELOPING FOR STITCHER:
                         // Adds XML-style metadata tags so the Stitcher knows how to sort this
                         const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}">\n${markdown}\n</ENTRY>`;
                         
-                        const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '');
+                        const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
                         fs.writeFileSync(path.join(outputDir, `${safeName}.md`), wrappedMarkdown);
                     }
+                } catch (e) { 
+                    console.error(`  > Error on ${item.name}: ${e.message}`); 
                 }
-            } catch (e) { 
-                console.error(`\nError on ${item.name}: ${e.message}`); 
+                
+                await new Promise(r => setTimeout(r, 1000)); // Throttling
             }
-            
-            await new Promise(r => setTimeout(r, 1000)); // Throttling
-        }
 
-        // Check for "Next" button
-        hasNext = $('.b-pagination-item-next a').length > 0;
-        currentPage++;
+            // Check for D&D Beyond's "Next" button pagination
+            hasNext = $('.b-pagination-item-next a').length > 0;
+            currentPage++;
+
+        } catch(e) {
+            console.error(`Failed to load page ${currentPage}: ${e.message}`);
+            break; // Stop loop if the main listing page crashes
+        }
     }
 
-    console.log(`\n\nSuccess! Extraction complete for ${targetPath}.`);
+    console.log(`\nSuccess! Extraction complete for ${targetPath}.`);
 }
 
-runBulkExtraction(TARGET_PATH);
+runBulkPipeline();

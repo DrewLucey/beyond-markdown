@@ -92,8 +92,8 @@ async function runStitcher() {
         const manifest = buildStitcherManifest(sourceDir);
         console.log(`Manifest built: ${manifest.length} chapters found in chronological order.\n`);
 
-        let masterContent = `\n`;
-        masterContent += `\n\n`;
+        // --- AI ARCHITECT UPGRADE: Macro-XML Wrapper ---
+        let masterContent = `<SOURCEBOOK id="${TARGET_BOOK.toUpperCase()}">\n\n`;
 
         for (let i = 0; i < manifest.length; i++) {
             const { slug, title } = manifest[i];
@@ -109,6 +109,8 @@ async function runStitcher() {
             masterContent += `\n\n</CHAPTER>\n\n`;
             masterContent += `--- \n\n`; 
         }
+
+        masterContent += `</SOURCEBOOK>\n`;
 
         fs.writeFileSync(outputFile, masterContent);
         console.log(`\nSuccess! Master Context saved to: ${outputFile}`);

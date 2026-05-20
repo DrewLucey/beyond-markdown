@@ -92,6 +92,35 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         }
     });
 
+    // 4.5 TAG FORMATTER (Fixes squished and fragmented tags)
+    // Extracts tags, normalizes the label, and rebuilds as a single inline paragraph
+    $content.find('.tags').each((_, container) => {
+        const $container = $(container);
+        
+        // Extract the tags and remove them from the DOM
+        const tags = [];
+        $container.find('.tag').each((_, tag) => {
+            const tagText = $(tag).text().replace(/\s+/g, ' ').trim();
+            if (tagText) tags.push(tagText);
+            $(tag).remove();
+        });
+
+        // Convert any remaining block-level elements (like <div class="label">) into spans 
+        // to prevent Turndown from forcefully injecting line breaks
+        $container.find('div, p').each((_, el) => {
+            const $el = $(el);
+            $el.replaceWith(`<span>${$el.html()}</span>`);
+        });
+
+        // Get the cleaned up label HTML
+        const labelHtml = $container.html().replace(/&nbsp;|\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+
+        if (tags.length > 0 || labelHtml) {
+            const space = labelHtml && !labelHtml.endsWith(' ') ? ' ' : '';
+            $container.replaceWith(`<p>${labelHtml}${space}${tags.join(', ')}</p>`);
+        }
+    });
+
     // 5. ADVENTURE MUNCHER UPGRADES
     const blockquoteSelectors = [
         '.compendium-blockquote', 
@@ -124,14 +153,22 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         if (highResUrl) $a.replaceWith(`<img src="${highResUrl}" alt="${altText}">`);
     });
 
-    // --- NESTED BOLD PREVENTER ---
+    // --- NESTED BOLD PREVENTER & LINK PRESERVER ---
     $content.find('.tooltip-hover, .m-spell-hover, .monster-tooltip, .magic-item-tooltip, .rollable').each((_, el) => {
         const $el = $(el);
-        // If already inside a strong tag or header, just return the text to prevent ****Nested**
-        if ($el.closest('strong, b, h1, h2, h3, h4, h5, h6').length > 0) {
-            $el.replaceWith($el.text().trim());
+        let text = $el.text().trim();
+        const href = $el.attr('href'); // Will be undefined if the tooltip is on a span
+        
+        // Check if we need to add bolding (prevent **** nested bolding)
+        if ($el.closest('strong, b, h1, h2, h3, h4, h5, h6').length === 0) {
+            text = `<strong>${text}</strong>`;
+        }
+
+        // If it has a valid destination link, preserve the anchor!
+        if (href && !href.startsWith('#')) {
+            $el.replaceWith(`<a href="${href}">${text}</a>`);
         } else {
-            $el.replaceWith(`<strong>${$el.text().trim()}</strong>`);
+            $el.replaceWith(text);
         }
     });
 
