@@ -320,6 +320,48 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         }
     });
 
+    // 9.6. MULTI-ROW SINGLE-COLUMN TABLE UNWRAPPER
+    // Flattens tables that act as vertical lists (max 1 column wide but multiple rows)
+    $content.find('table').each((_, table) => {
+        const $table = $(table);
+        
+        // Calculate the maximum number of columns in any row
+        let maxCols = 0;
+        $table.find('tr').each((_, tr) => {
+            const cols = $(tr).children('th, td').length;
+            if (cols > maxCols) maxCols = cols;
+        });
+
+        // If the table never exceeds 1 column, unwrap it completely
+        if (maxCols === 1 && $table.find('th, td').length > 1) {
+            let combinedHtml = '';
+            
+            // Preserve captions (like the Ability Score Summary header)
+            const $caption = $table.find('caption');
+            if ($caption.length > 0) {
+                combinedHtml += $caption.html();
+            }
+
+            // Extract and stack each row's content
+            $table.find('tr').each((_, tr) => {
+                const $cell = $(tr).children('th, td').first();
+                if ($cell.length > 0) {
+                    let cellHtml = $cell.html().trim();
+                    
+                    // If the cell is just a bold category name, ensure it spaces nicely
+                    if ($cell.children().length === 1 && $cell.children('strong, b').length === 1) {
+                        combinedHtml += `<p><strong>${$cell.text().trim()}</strong></p>`;
+                    } else {
+                        // Otherwise, drop the complex HTML in a div to prevent table formatting
+                        combinedHtml += `<div>${cellHtml}</div>`;
+                    }
+                }
+            });
+
+            $table.replaceWith(`<div>${combinedHtml}</div>`);
+        }
+    });
+
     // 9.75 PSEUDO-LIST CONVERTER (.hangingIndent)
     $content.find('div.hangingIndent, div.condensed-group.hangingIndent').each((_, el) => {
         const $div = $(el);
