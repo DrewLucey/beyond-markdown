@@ -2,6 +2,8 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
+import * as cheerio from 'cheerio';
+import { marked } from 'marked';
 import readline from 'readline'; // Built-in Node module for terminal prompts
 
 const require = createRequire(import.meta.url);
@@ -9,7 +11,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Target the folder created by our extractor
-const TARGET_BOOK = process.argv[2] || 'phb-2014';
+const TARGET_BOOK = process.argv[2];
+if (!TARGET_BOOK) {
+    console.error("Usage: node stitcher.js <sourcebook_id>");
+    console.error("Example: node stitcher.js wgte");
+    process.exit(1);
+}
+
 const sourceDir = path.resolve(__dirname, '../sources', TARGET_BOOK);
 
 // NEW NAMING & LOCATION: Saves into the book's subfolder as _master__[book].md
@@ -36,57 +44,82 @@ function buildStitcherManifest(dirPath) {
         throw new Error(`Directory not found. Run extract.js on ${TARGET_BOOK} first.`);
     }
 
-    // Ignore any file that starts with an underscore (e.g., _TEST BENCH_.md, _master__phb.md)
-    const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.md') && !f.startsWith('_'));
-    
-    // The extractor saved the Table of Contents as index.md
-    if (!files.includes('index.md')) {
-        throw new Error("index.md not found. Cannot determine chapter order.");
+    // Always start with the table of contents / index file
+    const indexFilePath = path.join(dirPath, 'index.md');
+    if (!fs.existsSync(indexFilePath)) {
+        throw new Error(`Critical Error: index.md not found in ${dirPath}. The stitcher relies on the index to determine the reading order.`);
     }
 
-    // Parse index.md to get the true chronological order of the book
-    const indexPath = path.join(dirPath, 'index.md');
-    const indexContent = fs.readFileSync(indexPath, 'utf-8');
+    console.log("Found index.md. Mapping reading order...");
+
+    const indexContent = fs.readFileSync(indexFilePath, 'utf-8');
     
-    // Look for markdown links: [Chapter 1: Step-by-Step Characters](https://.../step-by-step)
-    const linkRegex = /\[(.*?)\]\((.*?)\)/g;
-    const orderedFiles = [];
-    let match;
+    // Parse the Markdown into HTML so we can easily traverse the DOM and extract links
+    const htmlContent = marked.parse(indexContent);
+    const $ = cheerio.load(htmlContent);
 
-    // Push the root file first (skipping it if it's accidentally named the same as our master)
-    orderedFiles.push({ slug: 'index.md', title: 'Cover & Table of Contents' });
+    const chapterSlugs = [];
+    
+    // We implicitly add the index as the first chapter
+    chapterSlugs.push('index.md');
 
-    while ((match = linkRegex.exec(indexContent)) !== null) {
-        const title = match[1];
-        const url = match[2];
-        const slug = url.split('/').filter(Boolean).pop() + '.md';
+    const sourcebookId = TARGET_BOOK.toLowerCase();
+
+    // Locate chapter links inside your Table of Contents
+    $('a').each((_, el) => {
+        let href = $(el).attr('href');
+        if (!href) return;
         
-        // Ensure we only stitch files that actually downloaded successfully
-        // and ignore the master file itself if we are re-running
-        if (files.includes(slug) && !orderedFiles.find(f => f.slug === slug) && !slug.startsWith('_master__')) {
-            orderedFiles.push({ slug, title });
+        if (href.includes(`/sources/${sourcebookId}/`)) {
+            // --- THE HASH CUTTER ---
+            // Cleans out anchor tags (#) and query params (?) commonly used in legacy prototypes
+            let cleanSlug = href.split('/sources/')[1]; // e.g., "wgte/what-is-eberron#AMagicalWorld"
+            cleanSlug = cleanSlug.split('#')[0].split('?')[0]; // Resolves down strictly to "wgte/what-is-eberron"
+            
+            const pathParts = cleanSlug.split('/');
+            const slug = pathParts[pathParts.length - 1]; // Pulls out "what-is-eberron"
+            
+            // Ignore the base index page and map duplicates cleanly
+            if (slug && slug !== sourcebookId && slug !== 'index') {
+                const targetFilename = `${slug}.md`;
+                if (!chapterSlugs.includes(targetFilename)) {
+                    chapterSlugs.push(targetFilename);
+                }
+            }
+        }
+    });
+
+    const manifest = [];
+    
+    // Validate that the files mapped from the index actually exist in your local directory
+    for (const filename of chapterSlugs) {
+        const filePath = path.join(dirPath, filename);
+        if (fs.existsSync(filePath)) {
+            // Convert slug back into a Title Case string for the XML wrapper
+            const rawTitle = filename.replace('.md', '').replace(/-/g, ' ');
+            const title = rawTitle.charAt(0).toUpperCase() + rawTitle.slice(1);
+            
+            manifest.push({
+                slug: filename,
+                title: title
+            });
+        } else {
+            console.warn(`[WARNING] Skipping missing file referenced in index: ${filename}`);
         }
     }
 
-    return orderedFiles;
+    return manifest;
 }
 
 async function runStitcher() {
     try {
-        console.log(`--- Starting The Stitcher for ${TARGET_BOOK} ---`);
-
-        // --- NEW: INTERACTIVE OVERWRITE PROTECTION ---
         if (fs.existsSync(outputFile)) {
-            console.log(`\n⚠️ WARNING: Master file '_master__${TARGET_BOOK}.md' already exists in the ${TARGET_BOOK} folder.`);
-            const answer = await askQuestion(`Do you want to overwrite it? (y/N): `);
-            
-            if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-                console.log("\nOperation aborted by user. Existing file was kept.");
-                return; // Exit the script safely
+            const answer = await askQuestion(`\n⚠️ The master file for ${TARGET_BOOK} already exists. Overwrite? (y/n): `);
+            if (answer.toLowerCase() !== 'y') {
+                console.log('Aborting stitch process.');
+                return;
             }
-            console.log("\nOverwriting existing file...");
-        } else {
-            console.log(""); // Just for clean spacing
+            console.log(''); // Formatting spacing
         }
 
         const manifest = buildStitcherManifest(sourceDir);
@@ -117,11 +150,11 @@ async function runStitcher() {
         
         // Output file size info
         const stats = fs.statSync(outputFile);
-        const fileSizeInMegabytes = stats.size / (1024*1024);
-        console.log(`File Size: ${fileSizeInMegabytes.toFixed(2)} MB`);
+        const fileSizeInMegabytes = (stats.size / (1024 * 1024)).toFixed(2);
+        console.log(`File Size: ${fileSizeInMegabytes} MB`);
 
-    } catch (err) {
-        console.error("\nStitcher Failed:", err.message);
+    } catch (error) {
+        console.error(`\nStitcher Failed: ${error.message}`);
     }
 }
 
