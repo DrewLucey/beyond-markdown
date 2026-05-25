@@ -31,7 +31,7 @@ async function runRepoStitcher() {
         if (fs.existsSync(outputFile)) {
             console.log(`\n⚠️ WARNING: Master file '_master__${TARGET_REPO}.md' already exists.`);
             const answer = await askQuestion(`Do you want to overwrite it? (y/n): `);
-            if (!answer.toLowerCase().startsWith('y')) {
+            if (answer.toLowerCase() !== 'y') {
                 console.log("Stitching aborted by user. Existing file was kept.");
                 return; 
             }
@@ -39,7 +39,14 @@ async function runRepoStitcher() {
         }
 
         let files = fs.readdirSync(sourceDir).filter(f => f.endsWith('.md') && !f.startsWith('_'));
-        files.sort((a, b) => a.localeCompare(b));
+        
+        // --- SEMANTIC SORTING FIX ---
+        // Strips the DDB numerical prefix during the sort so identical items group together alphabetically
+        files.sort((a, b) => {
+            const nameA = a.replace(/^\d+-/, ''); // '123-Aasimar.md' -> 'Aasimar.md'
+            const nameB = b.replace(/^\d+-/, ''); // '999-Aasimar.md' -> 'Aasimar.md'
+            return nameA.localeCompare(nameB);
+        });
 
         console.log(`Found ${files.length} items to stitch.\n`);
 
@@ -67,8 +74,8 @@ async function runRepoStitcher() {
         const fileSizeInMegabytes = (stats.size / (1024*1024)).toFixed(2);
         console.log(`File Size: ${fileSizeInMegabytes} MB`);
 
-    } catch (error) {
-        console.error("Pipeline Failed:", error.message);
+    } catch (err) {
+        console.error(`\nStitcher Failed: ${err.message}`);
     }
 }
 
