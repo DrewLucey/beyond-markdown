@@ -1,9 +1,11 @@
 # Local Test Scripts
 .sandbox/
-# Local Test Scripts
-.examples/
 # Secrets and Variables, ex. CobaltSession Cookie
 .env
+# Local Test Scripts
+.examples/
+# VS Code Settings, Extensions, and Launch Configurations
+.vscode/
 # User will need to run `npm install` to get the dependencies
 node_modules/
 # Omit Extracted Source Files
