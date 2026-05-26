@@ -103,31 +103,38 @@ async function runBulkMuncher() {
                 }
             }
 
-                    if ($content && $content.length > 0) {
-                        
-                        // --- THE BADGE SANITIZER ---
-                        // Intercept the legacy badges before Turndown converts them
-                        const legacyBadge = $content.find('.badge, #legacy-badge');
-                        if (legacyBadge.length > 0) {
-                            const mainHeader = $content.find('h1').first();
-                            
-                            // 1. Destroy the tooltips and links from the DOM entirely
-                            $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
-                            
-                            // 2. Extract just the raw text of the header
-                            let baseTitle = mainHeader.contents().filter(function() {
-                                return this.nodeType === 3; // Grabs strictly the text node
-                            }).text().replace(/\s+/g, ' ').trim();
-                            
-                            // 3. Rewrite the header cleanly
-                            if (baseTitle) {
-                                mainHeader.text(`${baseTitle} (Legacy)`);
-                            }
-                            
-                            // 4. Remove the badge container so Turndown doesn't read the word "Legacy" twice
-                            legacyBadge.remove();
-                        }
-                        // ---------------------------
+            if ($content && $content.length > 0) {
+                // --- EXTRACT ID FOR TARGET ANCHOR ---
+                const idMatch = item.url.match(/\/(\d+)-/);
+                const entityId = idMatch ? idMatch[1] : '';
+
+                // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
+                const legacyBadge = $content.find('.badge, #legacy-badge');
+                const mainHeader = $content.find('h1').first();
+
+                if (mainHeader.length > 0) {
+                    // 1. Force the H1 to use our unique, scoped ID (e.g., id="Aasimar-1751434")
+                    const safeNameForAnchor = item.name.replace(/\s+\(Legacy\)/i, '').replace(/[^a-zA-Z0-9]/g, '');
+                    if (entityId && safeNameForAnchor) {
+                        mainHeader.attr('id', `${safeNameForAnchor}-${entityId}`);
+                    }
+                }
+
+                if (legacyBadge.length > 0) {
+                    // 2. Destroy the tooltips and links from the DOM entirely
+                    $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
+                    
+                    // 3. Extract just the raw text of the header
+                    let baseTitle = mainHeader.contents().filter(function() { return this.nodeType === 3; }).text().replace(/\s+/g, ' ').trim();
+                    
+                    // 4. Rewrite the header cleanly
+                    if (baseTitle) mainHeader.text(`${baseTitle} (Legacy)`);
+                    
+                    // 5. Remove the badge container so Turndown doesn't read the word "Legacy" twice
+                    legacyBadge.remove();
+                }
+                // ------------------------------
+                
                 const cleanHtml = processContent($s, $content, item.url, category);
                 
                 if (cleanHtml) {
@@ -141,11 +148,10 @@ async function runBulkMuncher() {
                     const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}">\n${markdown}\n</ENTRY>`;
                     
                     // --- THE ID PRESERVATION FIX ---
-                    const idMatch = item.url.match(/\/(\d+)-/);
-                    const entityId = idMatch ? `${idMatch[1]}-` : '';
-                    
-                    const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '');
-                    const finalFileName = `${entityId}${safeName}.md`;
+                    const idMatchForFile = item.url.match(/\/(\d+)-/);
+                    const entityIdPrefix = idMatchForFile ? `${idMatchForFile[1]}-` : '';
+                    const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
+                    const finalFileName = `${entityIdPrefix}${safeName}.md`;
                     
                     fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
                     successCount++;

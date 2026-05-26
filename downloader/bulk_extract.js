@@ -165,27 +165,37 @@ async function runBulkPipeline() {
                     }
 
                     if ($content && $content.length > 0) {
-                        
-                        // --- THE BADGE SANITIZER ---
-                        // Intercept the legacy badges before Turndown converts them
+                        // --- EXTRACT ID FOR TARGET ANCHOR ---
+                        const idMatch = item.url.match(/\/(\d+)-/);
+                        const entityId = idMatch ? idMatch[1] : '';
+
+                        // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
                         const legacyBadge = $content.find('.badge, #legacy-badge');
+                        const mainHeader = $content.find('h1').first();
+
+                        if (mainHeader.length > 0) {
+                            // 1. Force the H1 to use our unique, scoped ID (e.g., id="Aasimar-1751434")
+                            const safeNameForAnchor = item.name.replace(/\s+\(Legacy\)/i, '').replace(/[^a-zA-Z0-9]/g, '');
+                            if (entityId && safeNameForAnchor) {
+                                mainHeader.attr('id', `${safeNameForAnchor}-${entityId}`);
+                            }
+                        }
+
                         if (legacyBadge.length > 0) {
-                            const mainHeader = $content.find('h1').first();
-                            
-                            // 1. Destroy the tooltips and links from the DOM entirely
+                            // 2. Destroy the tooltips and links from the DOM entirely
                             $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
                             
-                            // 2. Extract just the raw text of the header
+                            // 3. Extract just the raw text of the header
                             let baseTitle = mainHeader.contents().filter(function() {
                                 return this.nodeType === 3; // Grabs strictly the text node
                             }).text().replace(/\s+/g, ' ').trim();
                             
-                            // 3. Rewrite the header cleanly
+                            // 4. Rewrite the header cleanly
                             if (baseTitle) {
                                 mainHeader.text(`${baseTitle} (Legacy)`);
                             }
                             
-                            // 4. Remove the badge container so Turndown doesn't read the word "Legacy" twice
+                            // 5. Remove the badge container so Turndown doesn't read the word "Legacy" twice
                             legacyBadge.remove();
                         }
                         // ---------------------------

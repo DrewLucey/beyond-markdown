@@ -464,12 +464,54 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         $table.replaceWith($newTable);
     });
 
-    // 11. LINK RESOLUTION
+        // 11. LINK RESOLUTION (WITH SCOPED INTERNAL ANCHORS)
     $content.find('a, img').each((_, el) => {
-        const attr = $(el).is('a') ? 'href' : 'src';
-        const val = $(el).attr(attr);
-        if (val && !val.startsWith('#') && !val.startsWith('http')) {
-            try { $(el).attr(attr, new URL(val, 'https://www.dndbeyond.com').href); } catch (e) {}
+        const isAnchor = $(el).is('a');
+        const attr = isAnchor ? 'href' : 'src';
+        let val = $(el).attr(attr);
+        
+        if (!val) return;
+
+        // 1. Normalize all relative URLs to absolute first
+        if (val.startsWith('/')) {
+            val = 'https://www.dndbeyond.com' + val;
+            $(el).attr(attr, val);
+        }
+
+        if (isAnchor) {
+            // 2. Sourcebook links MUST remain absolute here so stitcher.js can read the manifest!
+            if (val.includes('/sources/')) {
+                return; // Do NOT strip sourcebook links to hashes.
+            }
+
+            // 3. Identify Compendium Links
+            const isCompendium = val.includes('/spells/') || val.includes('/monsters/') || val.includes('/magic-items/') || val.includes('/species/') || val.includes('/feats/') || val.includes('/backgrounds/') || val.includes('/equipment/');
+            
+            if (isCompendium) {
+                if (!val.includes('#')) {
+                    const parts = val.split('/');
+                    const lastPart = parts.pop().split('?')[0]; 
+                    
+                    // Extract the DDB ID from the URL slug
+                    const linkIdMatch = lastPart.match(/^(\d+)-/);
+                    if (linkIdMatch) {
+                        const entityId = linkIdMatch[1];
+                        let cleanName = lastPart.replace(/^\d+-/, '').replace(/-/g, '').replace(/[^a-zA-Z0-9]/g, '');
+                        cleanName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+                        
+                        $(el).attr('href', `#${cleanName}-${entityId}`);
+                    }
+                } else {
+                    // For compendium links with hashes, keep the hash for internal routing
+                    const hash = val.substring(val.indexOf('#'));
+                    $(el).attr('href', hash);
+                }
+            } 
+        } else {
+            // Handle relative image sources
+            if (!val.startsWith('http') && !val.startsWith('data:')) {
+                $(el).attr('src', 'https://www.dndbeyond.com' + val);
+            }
         }
     });
 

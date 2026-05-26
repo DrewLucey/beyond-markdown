@@ -1,23 +1,30 @@
 {
   "name": "beyond-markdown",
   "version": "1.0.0",
-  "description": "D&D Beyond Data Extractor, API Fetcher, and Markdown Stitcher for AI DM Integration",
-  "main": "downloader/api_fetcher.js",
+  "description": "D&D Beyond Public and Owned content to LLM/AI Optimized Markdown",
+  "main": "index.js",
   "type": "module",
   "scripts": {
+    "library": "node downloader/library.js",
     "extract": "node downloader/bulk_extract.js",
     "fetch": "node downloader/api_fetcher.js",
+    "munch": "node downloader/bulk_muncher.js",
     "stitch": "node downloader/stitcher.js",
-    "compile": "node downloader/character_compiler.js"
+    "stitch-repo": "node downloader/repo_stitcher.js",
+    "compile": "node downloader/character_compiler.js",
+    "convert": "node downloader/rules_converter.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DrewLucey/beyond-markdown.git"
+  },
+  "author": "Drew Lucey",
+  "license": "ISC",
   "dependencies": {
-    "axios": "^1.16.1",
-    "cheerio": "^1.2.0",
-    "dotenv": "^17.4.2",
-    "marked": "^18.0.4",
-    "turndown": "^7.2.4",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
+    "marked": "^11.1.1",
+    "turndown": "^7.1.2",
     "turndown-plugin-gfm": "^1.0.2"
-  },
-  "author": "",
-  "license": "ISC"
+  }
 }

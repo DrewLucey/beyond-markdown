@@ -1,6 +1,7 @@
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
@@ -9,63 +10,151 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const configPath = path.resolve(__dirname, '../config.cjs');
-const config = require(configPath);
+let config = {};
+try { 
+    config = require(configPath); 
+} catch (e) {
+    console.warn("Config file not found. Relying on environment variables.");
+}
 
-const BASE_URL = 'https://www.dndbeyond.com';
-const TARGET_DIR = process.argv[2] || '/spells'; // e.g., /monsters, /magic-items
+const LIBRARY_URL = 'https://www.dndbeyond.com/en/library?ownership=owned-shared';
+const OUTPUT_MAP_FILE = path.resolve(__dirname, '../sources/ruleset_map.json');
 
-async function crawlListing() {
+// Accurate Ruleset Naming Schema
+const RULESET_MAP = {
+    '5e': '5e',
+    '5.5e': '5.5e' // DDB seems to map 2024 to '5.5e' natively in the JSON
+};
+
+async function crawlLibrary() {
     try {
-        console.log(`--- Starting Listing Crawl: ${TARGET_DIR} ---`);
-        const itemManifest = new Map();
-        let currentPage = 1;
-        let hasNextPage = true;
+        console.log(`--- Crawling Library for Accurate Metadata ---`);
+        const sessionToken = config.cobaltSession || config.DNDBEYOND_COBALT_SESSION || process.env.COBALTSESSION || '';
+        
+        if (!sessionToken) {
+            console.error("❌ CobaltSession token is missing. Please check your config.cjs or .env file.");
+            process.exit(1);
+        }
 
-        while (hasNextPage) {
-            console.log(`Scanning Page ${currentPage}...`);
-            const url = `${BASE_URL}${TARGET_DIR}?page=${currentPage}`;
-            
-            const response = await axios.get(url, {
-                headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` }
-            });
+        const response = await axios.get(LIBRARY_URL, {
+            headers: { 
+                'Cookie': `CobaltSession=${sessionToken}`,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        });
 
-            const $ = cheerio.load(response.data);
+        const html = response.data;
+        const sourceMap = {};
+
+        console.log("Decoding Next.js data stream...");
+
+        // --- THE NEXT.JS JSON HIJACK ---
+        // DDB injects their entire Redux/State store into a hidden script tag pushed to an array
+        // We look for the specific push containing the sources array
+        const regex = /self\.__next_f\.push\(\[1,"(.*?)"\]\)/g;
+        let match;
+        
+        let foundSources = false;
+
+        while ((match = regex.exec(html)) !== null) {
+            const rawChunk = match[1];
+            // Unescape the Next.js chunk payload (replacing \" with ")
+            const unescapedChunk = rawChunk.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
             
-            // 1. DISCOVER ITEMS
-            // Standard DDB Listing Row Selector
-            $('.list-row, .info, .monster-name').find('a.link').each((_, el) => {
-                const href = $(el).attr('href');
-                const name = $(el).text().trim();
+            // Check if this chunk contains the sources payload
+            if (unescapedChunk.includes('{"sources":[')) {
+                foundSources = true;
+                const jsonStart = unescapedChunk.indexOf('{"sources":[');
                 
-                // Ensure it's a detail link (e.g., /spells/fireball) and not a category link
-                if (href && href.startsWith(TARGET_DIR + '/')) {
-                    const fullUrl = BASE_URL + href;
-                    if (!itemManifest.has(fullUrl)) {
-                        itemManifest.set(fullUrl, name);
+                // We use bracket balancing to safely extract the valid JSON object
+                let bracketCount = 0;
+                let endIdx = -1;
+                
+                for (let i = jsonStart; i < unescapedChunk.length; i++) {
+                    if (unescapedChunk[i] === '{') bracketCount++;
+                    else if (unescapedChunk[i] === '}') {
+                        bracketCount--;
+                        if (bracketCount === 0) {
+                            endIdx = i;
+                            break;
+                        }
                     }
                 }
-            });
-
-            // 2. CHECK FOR NEXT PAGE
-            const nextButton = $('.b-pagination-item-next a');
-            if (nextButton.length > 0 && currentPage < 50) { // Safety cap at 50 pages
-                currentPage++;
-                // Throttling to prevent 429 errors
-                await new Promise(res => setTimeout(res, 1000));
-            } else {
-                hasNextPage = false;
+                
+                if (endIdx !== -1) {
+                    try {
+                        const jsonStr = unescapedChunk.substring(jsonStart, endIdx + 1);
+                        const data = JSON.parse(jsonStr);
+                        
+                        if (data.sources && Array.isArray(data.sources)) {
+                            data.sources.forEach(source => {
+                                if (source.relativePath) {
+                                    const slug = source.relativePath.split('/').pop();
+                                    const rulesetName = source.ruleset?.name || '5e';
+                                    
+                                    sourceMap[slug] = {
+                                        title: source.name || slug,
+                                        ruleset: RULESET_MAP[rulesetName] || rulesetName,
+                                        type: source.type || 'unknown',
+                                        isLegacy: source.isLegacy === true,
+                                        path: source.relativePath
+                                    };
+                                }
+                            });
+                        }
+                    } catch (e) {
+                        console.error("JSON Parse failed on extracted stream array:", e.message);
+                    }
+                }
             }
         }
 
-        console.log(`\nDiscovered ${itemManifest.size} items in ${TARGET_DIR}.`);
-        
-        // Output the list for the extractor
-        const results = Array.from(itemManifest.entries());
-        results.forEach(([url, name]) => console.log(`${name}: ${url}`));
+        if (!foundSources || Object.keys(sourceMap).length === 0) {
+            console.warn("! Stream extraction failed or array was empty. Falling back to DOM parsing.");
+            
+            // DOM Fallback in case D&D Beyond dramatically changes their Next.js state structure
+            const $ = cheerio.load(html);
+            $('[data-testid="sourceCard"]').each((_, el) => {
+                const $link = $(el).find('a[class*="sourceTitle"]');
+                const title = $link.text().trim();
+                const relativePath = $link.attr('href');
+                
+                if (title && relativePath) {
+                    const slug = relativePath.split('/').pop();
+                    // Fallback heuristics
+                    const ruleset = title.includes('2024') ? '5.5e' : '5e'; 
+                    sourceMap[slug] = { 
+                        title, 
+                        ruleset, 
+                        type: 'unknown', 
+                        isLegacy: false, 
+                        path: relativePath 
+                    };
+                }
+            });
+        }
+
+        const sourceCount = Object.keys(sourceMap).length;
+
+        if (sourceCount === 0) {
+            console.warn("! No sources mapped. Verify your CobaltSession token is valid and unexpired.");
+        } else {
+            const outputDir = path.dirname(OUTPUT_MAP_FILE);
+            if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+            
+            fs.writeFileSync(OUTPUT_MAP_FILE, JSON.stringify(sourceMap, null, 2));
+            console.log(`✅ Metadata Dictionary successfully saved to: ${OUTPUT_MAP_FILE}`);
+            console.log(`Mapped ${sourceCount} sourcebooks.`);
+            
+            // Quick visual verification for the user
+            const sample55e = Object.values(sourceMap).find(s => s.ruleset === '5.5e');
+            const sampleLegacy = Object.values(sourceMap).find(s => s.isLegacy === true);
+            console.log(`\nSample Captures:\n- 5.5e System: ${sample55e ? sample55e.title : 'None found'}\n- Legacy Material: ${sampleLegacy ? sampleLegacy.title : 'None found'}\n`);
+        }
 
     } catch (error) {
-        console.error("Listing Crawl Failed:", error.message);
+        console.error("Library Crawl Failed:", error.message);
     }
 }
 
-crawlListing();
+crawlLibrary();
