@@ -257,36 +257,82 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         }
     });
 
-    $content.find('.ability-block').each((_, el) => {
+    // 9.1 UNIFIED ABILITY SCORE FORMATTER (Compendium & Sourcebook Layouts)
+    $content.find('.ability-block, .stat-block-ability-scores').each((_, el) => {
         const $attrBlock = $(el);
-        let attributesHtml = '';
+        const stats = [];
         
-        $attrBlock.find('.ability-block__stat').each((_, attr) => {
+        $attrBlock.find('.ability-block__stat, .stat-block-ability-scores-stat').each((_, attr) => {
             const $attr = $(attr);
-            const label = $attr.find('.ability-block__heading').text().trim();
-            const score = $attr.find('.ability-block__score').text().trim();
-            const modifier = $attr.find('.ability-block__modifier').text().trim();
+            const label = $attr.find('.ability-block__heading, .stat-block-ability-scores-heading').text().trim();
+            const score = $attr.find('.ability-block__score, .stat-block-ability-scores-score').text().trim();
+            const modifier = $attr.find('.ability-block__modifier, .stat-block-ability-scores-modifier').text().trim();
             
             if (label && score) {
-                attributesHtml += `<p><strong>${label}:</strong> ${score} ${modifier}</p>`;
+                // Compresses stats into a single inline string to save massive vertical space
+                stats.push(`<strong>${label}</strong> ${score} ${modifier}`);
             }
         });
 
-        if (attributesHtml) {
-            $attrBlock.replaceWith(`<div>${attributesHtml}</div>`);
+        if (stats.length > 0) {
+            $attrBlock.replaceWith(`<p>${stats.join(' | ')}</p>`);
         }
     });
 
-    const headerSelectors = [
+    // 9.1b 2024 SOURCEBOOK ABILITY SCORE FORMATTER
+    $content.find('.stats').each((_, el) => {
+        const $stats = $(el);
+        // Only target the 2024 physical/mental split tables
+        if ($stats.find('table.physical, table.mental').length > 0) {
+            const stats = [];
+            
+            $stats.find('tbody tr').each((_, tr) => {
+                const $tr = $(tr);
+                const label = $tr.find('th').text().trim().toUpperCase();
+                const tds = $tr.find('td');
+                if (tds.length >= 2) {
+                    const score = $(tds[0]).text().trim();
+                    const modifier = $(tds[1]).text().trim();
+                    
+                    // Force the modifier into parentheses if the raw HTML dropped them
+                    let modText = modifier;
+                    if (modText && !modText.startsWith('(')) modText = `(${modText})`;
+                    
+                    if (label && score) {
+                        stats.push(`<strong>${label}</strong> ${score} ${modText}`);
+                    }
+                }
+            });
+
+            if (stats.length > 0) {
+                $stats.replaceWith(`<p>${stats.join(' | ')}</p>`);
+            }
+        }
+    });
+
+    // 9.2 STAT BLOCK HEADERS
+    const h3Selectors = [
         '.mon-stat-block__description-block-heading', 
         '.mon-stat-block__description-heading', 
         '.ddb-statblock-section-heading',
-        '.monster-header'
+        '.Stat-Block-Styles_Stat-Block-Title', // 2014 Sourcebook Monster Titles
+        '.stat-block > h2' // 2024 Sourcebook Monster Titles
     ];
     
-    $content.find(headerSelectors.join(', ')).each((_, el) => {
+    $content.find(h3Selectors.join(', ')).each((_, el) => {
         const $el = $(el);
-        $el.replaceWith(`<h3>${$el.text().trim()}</h3>`);
+        // Using .html() instead of .text() preserves inner tooltips/links inside the new header
+        $el.replaceWith(`<h3>${$el.html().trim()}</h3>`);
+    });
+
+    const h4Selectors = [
+        '.Stat-Block-Styles_Stat-Block-Heading', // 2014 Sourcebook Actions/Reactions
+        '.monster-header' // 2024 Sourcebook Actions/Reactions
+    ];
+
+    $content.find(h4Selectors.join(', ')).each((_, el) => {
+        const $el = $(el);
+        $el.replaceWith(`<h4>${$el.html().trim()}</h4>`);
     });
 
     // 9.5. SINGLE-COLUMN "CARD" TABLE UNWRAPPER
@@ -464,7 +510,7 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         $table.replaceWith($newTable);
     });
 
-        // 11. LINK RESOLUTION (WITH SCOPED INTERNAL ANCHORS)
+    // 11. LINK RESOLUTION (WITH SCOPED INTERNAL ANCHORS)
     $content.find('a, img').each((_, el) => {
         const isAnchor = $(el).is('a');
         const attr = isAnchor ? 'href' : 'src';
@@ -496,8 +542,7 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
                     const linkIdMatch = lastPart.match(/^(\d+)-/);
                     if (linkIdMatch) {
                         const entityId = linkIdMatch[1];
-                        let cleanName = lastPart.replace(/^\d+-/, '').replace(/-/g, '').replace(/[^a-zA-Z0-9]/g, '');
-                        cleanName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+                        const cleanName = lastPart.replace(/^\d+-/, '').replace(/-/g, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
                         
                         $(el).attr('href', `#${cleanName}-${entityId}`);
                     }
@@ -511,6 +556,29 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
             // Handle relative image sources
             if (!val.startsWith('http') && !val.startsWith('data:')) {
                 $(el).attr('src', 'https://www.dndbeyond.com' + val);
+            }
+        }
+    });
+
+    // 12. ID AND ANCHOR NORMALIZATION
+    // Normalizes all IDs and hash links to lowercase. This guarantees that VS Code 
+    // previewers and internal LLM references perfectly align regardless of original casing.
+    $content.find('[id]').each((_, el) => {
+        const id = $(el).attr('id');
+        if (id) $(el).attr('id', id.toLowerCase());
+    });
+
+    $content.find('a').each((_, el) => {
+        const href = $(el).attr('href');
+        if (href) {
+            if (href.startsWith('#')) {
+                $(el).attr('href', href.toLowerCase());
+            } else if (href.includes('#')) {
+                // Split by the first '#' only
+                const hashIndex = href.indexOf('#');
+                const baseUrl = href.substring(0, hashIndex);
+                const hash = href.substring(hashIndex);
+                $(el).attr('href', `${baseUrl}${hash.toLowerCase()}`);
             }
         }
     });

@@ -5,6 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "beyond-markdown": "node index.js",
     "library": "node downloader/library.js",
     "extract": "node downloader/bulk_extract.js",
     "fetch": "node downloader/api_fetcher.js",
