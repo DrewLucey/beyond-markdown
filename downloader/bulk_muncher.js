@@ -1,3 +1,7 @@
+/**
+ * bulk_muncher.js
+ * Handles paginated listings and wraps items for the central Repository Stitcher.
+ */
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';

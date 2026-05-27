@@ -18,16 +18,13 @@ const __dirname = path.dirname(__filename);
 const TARGET_BOOK = process.argv[2];
 if (!TARGET_BOOK) {
     console.error("Usage: node stitcher.js <sourcebook_id>");
-    console.error("Example: node stitcher.js wgte");
+    console.error("Example: node stitcher.js phb-2024");
     process.exit(1);
 }
 
 const sourceDir = path.resolve(__dirname, '../sources', TARGET_BOOK);
 const outputFile = path.resolve(__dirname, `../sources/${TARGET_BOOK}/_master__${TARGET_BOOK}.md`);
 
-/**
- * Creates an interactive terminal prompt.
- */
 function askQuestion(query) {
     const rl = readline.createInterface({
         input: process.stdin,
@@ -51,37 +48,34 @@ function buildStitcherManifest(dirPath) {
         throw new Error(`Critical Error: index.md not found in ${dirPath}. The stitcher relies on the index to determine reading order.`);
     }
 
-    console.log("Found index.md. Mapping reading order...");
+    // Capture every actual .md file that exists in the directory. 
+    // This is our source of truth.
+    const availableFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.md'));
+    
+    console.log(`Found ${availableFiles.length} atomic files. Mapping reading order from index.md...`);
 
     const indexContent = fs.readFileSync(indexFilePath, 'utf-8');
     const htmlContent = marked.parse(indexContent);
     const $ = cheerio.load(htmlContent);
 
-    const chapterSlugs = [];
-    chapterSlugs.push('index.md');
-
-    const sourcebookId = TARGET_BOOK.toLowerCase();
+    const chapterSlugs = ['index.md'];
 
     // Locate chapter links inside the Table of Contents
     $('a').each((_, el) => {
         let href = $(el).attr('href');
         if (!href) return;
         
-        if (href.includes(`/sources/${sourcebookId}/`)) {
-            // --- THE HASH CUTTER ---
-            // Cleans out anchor tags (#) and query params (?) commonly used in legacy prototypes
-            let cleanSlug = href.split('/sources/')[1];
-            cleanSlug = cleanSlug.split('#')[0].split('?')[0]; 
-            
-            const pathParts = cleanSlug.split('/');
-            const slug = pathParts[pathParts.length - 1]; 
-            
-            // Ignore the base index page and map duplicates cleanly
-            if (slug && slug !== sourcebookId && slug !== 'index') {
-                const targetFilename = `${slug}.md`;
-                if (!chapterSlugs.includes(targetFilename)) {
-                    chapterSlugs.push(targetFilename);
-                }
+        // Isolate the final slug from ANY DDB URL (handles /sources/phb/ and /sources/dnd/phb/ equally)
+        let cleanSlug = href.split('?')[0].split('#')[0].replace(/\/$/, ""); 
+        const pathParts = cleanSlug.split('/');
+        const targetSlug = pathParts[pathParts.length - 1]; 
+        
+        // Find if this slug matches any downloaded file (e.g. 'combat' matches 'combat.md')
+        const matchedFileName = availableFiles.find(f => f.replace('.md', '').toLowerCase() === targetSlug.toLowerCase());
+
+        if (matchedFileName && matchedFileName !== 'index.md') {
+            if (!chapterSlugs.includes(matchedFileName)) {
+                chapterSlugs.push(matchedFileName);
             }
         }
     });
@@ -93,18 +87,70 @@ function buildStitcherManifest(dirPath) {
         const filePath = path.join(dirPath, filename);
         if (fs.existsSync(filePath)) {
             const rawTitle = filename.replace('.md', '').replace(/-/g, ' ');
-            const title = rawTitle.charAt(0).toUpperCase() + rawTitle.slice(1);
+            const title = rawTitle.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
             
             manifest.push({
                 slug: filename,
                 title: title
             });
-        } else {
-            console.warn(`[WARNING] Skipping missing file referenced in index: ${filename}`);
         }
     }
 
+    // Catch-All: Append any files that downloaded but weren't linked in the index.md
+    availableFiles.forEach(file => {
+        if (!chapterSlugs.includes(file) && !file.startsWith('_master__')) {
+            console.log(`[Info] Automatically appending unlinked file: ${file}`);
+            const rawTitle = file.replace('.md', '').replace(/-/g, ' ');
+            const title = rawTitle.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            manifest.push({ slug: file, title: title });
+        }
+    });
+
     return manifest;
+}
+
+/**
+ * Parses and transforms relative Markdown links pointing to other chapter files.
+ */
+function transformMarkdownLinks(content, manifest) {
+    const validChapterIds = new Set(manifest.map(m => m.slug.replace('.md', '')));
+
+    return content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, url) => {
+        if (url.startsWith('#')) return match;
+
+        let targetSlug = "";
+        let hash = "";
+
+        // If the URL contains DDB routing, isolate the target slug
+        if (url.includes('/sources/')) {
+            let cleanUrl = url.split('?')[0]; 
+            const hashIndex = cleanUrl.indexOf('#');
+            
+            hash = hashIndex !== -1 ? cleanUrl.substring(hashIndex) : '';
+            cleanUrl = hashIndex !== -1 ? cleanUrl.substring(0, hashIndex) : cleanUrl;
+            
+            const pathParts = cleanUrl.replace(/\/$/, "").split('/');
+            targetSlug = pathParts[pathParts.length - 1];
+        } else if (url.endsWith('.md') || url.includes('.md#')) {
+            // If it is a direct local file reference
+            let cleanUrl = url.split('?')[0];
+            const hashIndex = url.indexOf('#');
+            
+            hash = hashIndex !== -1 ? url.substring(hashIndex) : '';
+            targetSlug = cleanUrl.split('#')[0].replace('.md', '');
+        }
+
+        // If the identified target exists in our compiled manifest, update the link
+        if (targetSlug && validChapterIds.has(targetSlug)) {
+            if (hash) {
+                return `[${text}](${hash})`;
+            } else {
+                return `[${text}](#${targetSlug})`;
+            }
+        }
+
+        return match;
+    });
 }
 
 async function runStitcher() {
@@ -122,10 +168,9 @@ async function runStitcher() {
         }
 
         const manifest = buildStitcherManifest(sourceDir);
-        console.log(`Manifest built: ${manifest.length} chapters found in chronological order.\n`);
+        console.log(`Manifest built: ${manifest.length} chapters loaded.\n`);
 
         // --- AI METADATA INJECTION ---
-        // Load the library dictionary to extract exact ruleset/type/legacy traits
         let bookMeta = { ruleset: "5e", type: "sourcebook", isLegacy: false };
         const mapFilePath = path.resolve(__dirname, '../sources/ruleset_map.json');
         
@@ -142,7 +187,6 @@ async function runStitcher() {
             console.warn("ruleset_map.json not found. Run `node downloader/library.js` for better AI metadata.");
         }
 
-        // Apply metadata directly to the root wrapper
         let masterContent = `<SOURCEBOOK id="${TARGET_BOOK.toUpperCase()}" ruleset="${bookMeta.ruleset}" type="${bookMeta.type}" legacy="${bookMeta.isLegacy}">\n\n`;
 
         for (let i = 0; i < manifest.length; i++) {
@@ -152,6 +196,9 @@ async function runStitcher() {
             console.log(`[${i+1}/${manifest.length}] Stitching: ${title}`);
             
             let chapterText = fs.readFileSync(filePath, 'utf-8');
+            
+            // Execute the Link Transformer
+            chapterText = transformMarkdownLinks(chapterText, manifest);
             
             masterContent += `<CHAPTER id="${slug.replace('.md', '')}" title="${title}">\n\n`;
             masterContent += chapterText;

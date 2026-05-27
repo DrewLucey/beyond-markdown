@@ -1,3 +1,6 @@
+/**
+ * extract.js
+ */
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -12,9 +15,16 @@ const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 1. Load Authentication
+// 1. Load Authentication (with resilient fallback)
 const configPath = path.resolve(__dirname, '../config.cjs');
-const config = require(configPath);
+let config = {};
+try {
+    config = require(configPath);
+} catch (e) {
+    console.warn(`⚠️ Could not load config.cjs (${e.message}). Falling back to environment variables.`);
+}
+
+const sessionToken = config.cobaltSession || config.DNDBEYOND_COBALT_SESSION || process.env.COBALTSESSION || '';
 
 // 2. Initialize Turndown
 const turndownService = new TurndownService({
@@ -64,7 +74,7 @@ async function runPipeline() {
         console.log(`Targeting: ${TARGET_URL}`);
         
         const response = await axios.get(TARGET_URL, {
-            headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` }
+            headers: { 'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '' }
         });
 
         const $ = cheerio.load(response.data);
@@ -108,7 +118,7 @@ async function runPipeline() {
 
             try {
                 const chapterRes = await axios.get(sectionUrl, {
-                    headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` },
+                    headers: { 'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '' },
                     maxRedirects: 5
                 });
 
@@ -155,8 +165,11 @@ async function runPipeline() {
                 if (sanitizedHtml) {
                     let markdown = turndownService.turndown(sanitizedHtml);
                     
-                    // Optional Asterisk Escaping Fix (Un-escapes Turndown's aggressive backslashes on normal asterisks)
+                    // --- THE ESCAPE CHARACTER FIX ---
+                    // Un-escapes Turndown's aggressive backslashes on normal asterisks and brackets
                     markdown = markdown.replace(/\\\*/g, '*'); 
+                    markdown = markdown.replace(/\\\[/g, '[');
+                    markdown = markdown.replace(/\\\]/g, ']');
                     
                     markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
                     fs.writeFileSync(filePath, markdown);
