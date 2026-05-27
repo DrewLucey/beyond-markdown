@@ -1,6 +1,7 @@
 /**
  * js/handlers.js
  * Handles DOM surgery to ensure technical fidelity before Markdown conversion.
+ * Updated: Preserved Absolute URLs with Semantic URN Title Attributes
  */
 export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     // 1. NOISE SANITIZATION
@@ -93,11 +94,9 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     });
 
     // 4.5 TAG FORMATTER (Fixes squished and fragmented tags)
-    // Extracts tags, normalizes the label, and rebuilds as a single inline paragraph
     $content.find('.tags').each((_, container) => {
         const $container = $(container);
         
-        // Extract the tags and remove them from the DOM
         const tags = [];
         $container.find('.tag').each((_, tag) => {
             const tagText = $(tag).text().replace(/\s+/g, ' ').trim();
@@ -105,14 +104,11 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
             $(tag).remove();
         });
 
-        // Convert any remaining block-level elements (like <div class="label">) into spans 
-        // to prevent Turndown from forcefully injecting line breaks
         $container.find('div, p').each((_, el) => {
             const $el = $(el);
             $el.replaceWith(`<span>${$el.html()}</span>`);
         });
 
-        // Get the cleaned up label HTML
         const labelHtml = $container.html().replace(/&nbsp;|\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
 
         if (tags.length > 0 || labelHtml) {
@@ -157,14 +153,12 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     $content.find('.tooltip-hover, .m-spell-hover, .monster-tooltip, .magic-item-tooltip, .rollable').each((_, el) => {
         const $el = $(el);
         let text = $el.text().trim();
-        const href = $el.attr('href'); // Will be undefined if the tooltip is on a span
+        const href = $el.attr('href'); 
         
-        // Check if we need to add bolding (prevent **** nested bolding)
         if ($el.closest('strong, b, h1, h2, h3, h4, h5, h6').length === 0) {
             text = `<strong>${text}</strong>`;
         }
 
-        // If it has a valid destination link, preserve the anchor!
         if (href && !href.startsWith('#')) {
             $el.replaceWith(`<a href="${href}">${text}</a>`);
         } else {
@@ -269,7 +263,6 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
             const modifier = $attr.find('.ability-block__modifier, .stat-block-ability-scores-modifier').text().trim();
             
             if (label && score) {
-                // Compresses stats into a single inline string to save massive vertical space
                 stats.push(`<strong>${label}</strong> ${score} ${modifier}`);
             }
         });
@@ -282,10 +275,8 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     // 9.1b 2024 SOURCEBOOK ABILITY SCORE FORMATTER
     $content.find('.stats').each((_, el) => {
         const $stats = $(el);
-        // Only target the 2024 physical/mental split tables
         if ($stats.find('table.physical, table.mental').length > 0) {
             const stats = [];
-            
             $stats.find('tbody tr').each((_, tr) => {
                 const $tr = $(tr);
                 const label = $tr.find('th').text().trim().toUpperCase();
@@ -293,17 +284,11 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
                 if (tds.length >= 2) {
                     const score = $(tds[0]).text().trim();
                     const modifier = $(tds[1]).text().trim();
-                    
-                    // Force the modifier into parentheses if the raw HTML dropped them
                     let modText = modifier;
                     if (modText && !modText.startsWith('(')) modText = `(${modText})`;
-                    
-                    if (label && score) {
-                        stats.push(`<strong>${label}</strong> ${score} ${modText}`);
-                    }
+                    if (label && score) stats.push(`<strong>${label}</strong> ${score} ${modText}`);
                 }
             });
-
             if (stats.length > 0) {
                 $stats.replaceWith(`<p>${stats.join(' | ')}</p>`);
             }
@@ -315,21 +300,16 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         '.mon-stat-block__description-block-heading', 
         '.mon-stat-block__description-heading', 
         '.ddb-statblock-section-heading',
-        '.Stat-Block-Styles_Stat-Block-Title', // 2014 Sourcebook Monster Titles
-        '.stat-block > h2' // 2024 Sourcebook Monster Titles
+        '.Stat-Block-Styles_Stat-Block-Title', 
+        '.stat-block > h2' 
     ];
     
     $content.find(h3Selectors.join(', ')).each((_, el) => {
         const $el = $(el);
-        // Using .html() instead of .text() preserves inner tooltips/links inside the new header
         $el.replaceWith(`<h3>${$el.html().trim()}</h3>`);
     });
 
-    const h4Selectors = [
-        '.Stat-Block-Styles_Stat-Block-Heading', // 2014 Sourcebook Actions/Reactions
-        '.monster-header' // 2024 Sourcebook Actions/Reactions
-    ];
-
+    const h4Selectors = ['.Stat-Block-Styles_Stat-Block-Heading', '.monster-header'];
     $content.find(h4Selectors.join(', ')).each((_, el) => {
         const $el = $(el);
         $el.replaceWith(`<h4>${$el.html().trim()}</h4>`);
@@ -349,12 +329,8 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
                 const $strong = $(el);
                 $strong.find('br').remove();
                 let text = $strong.text().trim();
-                
-                if (text && !text.endsWith(':')) {
-                    $strong.text(text + ': ');
-                } else if (text) {
-                    $strong.text(text + ' ');
-                }
+                if (text && !text.endsWith(':')) $strong.text(text + ': ');
+                else if (text) $strong.text(text + ' ');
             });
 
             let cellHtml = $cell.html() || '';
@@ -367,43 +343,30 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     });
 
     // 9.6. MULTI-ROW SINGLE-COLUMN TABLE UNWRAPPER
-    // Flattens tables that act as vertical lists (max 1 column wide but multiple rows)
     $content.find('table').each((_, table) => {
         const $table = $(table);
-        
-        // Calculate the maximum number of columns in any row
         let maxCols = 0;
         $table.find('tr').each((_, tr) => {
             const cols = $(tr).children('th, td').length;
             if (cols > maxCols) maxCols = cols;
         });
 
-        // If the table never exceeds 1 column, unwrap it completely
         if (maxCols === 1 && $table.find('th, td').length > 1) {
             let combinedHtml = '';
-            
-            // Preserve captions (like the Ability Score Summary header)
             const $caption = $table.find('caption');
-            if ($caption.length > 0) {
-                combinedHtml += $caption.html();
-            }
+            if ($caption.length > 0) combinedHtml += $caption.html();
 
-            // Extract and stack each row's content
             $table.find('tr').each((_, tr) => {
                 const $cell = $(tr).children('th, td').first();
                 if ($cell.length > 0) {
                     let cellHtml = $cell.html().trim();
-                    
-                    // If the cell is just a bold category name, ensure it spaces nicely
                     if ($cell.children().length === 1 && $cell.children('strong, b').length === 1) {
                         combinedHtml += `<p><strong>${$cell.text().trim()}</strong></p>`;
                     } else {
-                        // Otherwise, drop the complex HTML in a div to prevent table formatting
                         combinedHtml += `<div>${cellHtml}</div>`;
                     }
                 }
             });
-
             $table.replaceWith(`<div>${combinedHtml}</div>`);
         }
     });
@@ -412,18 +375,12 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     $content.find('div.hangingIndent, div.condensed-group.hangingIndent').each((_, el) => {
         const $div = $(el);
         const $children = $div.children('p, div');
-        
         if ($children.length > 0) {
             const $ul = $('<ul></ul>');
             $children.each((_, child) => {
-                const $child = $(child);
-                let content = $child.html() || '';
-                
+                let content = $(child).html() || '';
                 content = content.replace(/&nbsp;|\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
-                
-                if (content) {
-                    $ul.append(`<li>${content}</li>`);
-                }
+                if (content) $ul.append(`<li>${content}</li>`);
             });
             $div.replaceWith($ul);
         }
@@ -433,27 +390,21 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     $content.find('ol > ul, ol > ol, ul > ul, ul > ol').each((_, sublist) => {
         const $sublist = $(sublist);
         const $prevLi = $sublist.prev('li');
-        if ($prevLi.length > 0) {
-            $prevLi.append($sublist);
-        }
+        if ($prevLi.length > 0) $prevLi.append($sublist);
     });
 
-    // 9.85 CONDENSED GROUP TIGHTENER (The Double-Newline Fix)
-    // Flattens paragraphs inside non-list .condensed-group divs into a single 
-    // paragraph separated by <br> so Turndown stacks them tightly.
+    // 9.85 CONDENSED GROUP TIGHTENER
     $content.find('div.condensed-group:not(.hangingIndent)').each((_, el) => {
         const $div = $(el);
         const $children = $div.children('p');
         if ($children.length > 0) {
             let combinedHtml = [];
-            $children.each((_, p) => {
-                combinedHtml.push($(p).html().trim());
-            });
+            $children.each((_, p) => combinedHtml.push($(p).html().trim()));
             $div.replaceWith(`<p>${combinedHtml.join('<br>')}</p>`);
         }
     });
 
-    // 10. TABLE PRE-PROCESSING & FLATTENING
+    // 10. TABLE PRE-PROCESSING
     $content.find('table').each((_, table) => {
         const $table = $(table);
         const $caption = $table.find('caption');
@@ -510,7 +461,7 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         $table.replaceWith($newTable);
     });
 
-    // 11. LINK RESOLUTION (WITH SCOPED INTERNAL ANCHORS)
+    // 11. LINK RESOLUTION & AI SEMANTIC CROSS-REFERENCING (Title Attributes)
     $content.find('a, img').each((_, el) => {
         const isAnchor = $(el).is('a');
         const attr = isAnchor ? 'href' : 'src';
@@ -518,42 +469,43 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
         
         if (!val) return;
 
-        // 1. Normalize all relative URLs to absolute first
+        // Keep all links as absolute for external clickable citations
         if (val.startsWith('/')) {
             val = 'https://www.dndbeyond.com' + val;
             $(el).attr(attr, val);
         }
 
         if (isAnchor) {
-            // 2. Sourcebook links MUST remain absolute here so stitcher.js can read the manifest!
-            if (val.includes('/sources/')) {
-                return; // Do NOT strip sourcebook links to hashes.
+            // Internal sourcebook chapter routing is handled by stitcher.js later
+            if (val.includes('/sources/')) return;
+
+            // Map DDB paths to our Database <ENTRY> types
+            const compendiumMap = {
+                '/spells/': 'SPELL',
+                '/monsters/': 'MONSTER',
+                '/magic-items/': 'MAGIC_ITEM',
+                '/equipment/': 'EQUIPMENT',
+                '/species/': 'SPECIES',
+                '/races/': 'SPECIES', 
+                '/feats/': 'FEAT',
+                '/backgrounds/': 'BACKGROUND',
+                '/classes/': 'CLASS'
+            };
+
+            let matchedType = null;
+            for (const [path, type] of Object.entries(compendiumMap)) {
+                if (val.includes(path)) {
+                    matchedType = type;
+                    break;
+                }
             }
 
-            // 3. Identify Compendium Links
-            const isCompendium = val.includes('/spells/') || val.includes('/monsters/') || val.includes('/magic-items/') || val.includes('/species/') || val.includes('/feats/') || val.includes('/backgrounds/') || val.includes('/equipment/');
-            
-            if (isCompendium) {
-                if (!val.includes('#')) {
-                    const parts = val.split('/');
-                    const lastPart = parts.pop().split('?')[0]; 
-                    
-                    // Extract the DDB ID from the URL slug
-                    const linkIdMatch = lastPart.match(/^(\d+)-/);
-                    if (linkIdMatch) {
-                        const entityId = linkIdMatch[1];
-                        const cleanName = lastPart.replace(/^\d+-/, '').replace(/-/g, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-                        
-                        $(el).attr('href', `#${cleanName}-${entityId}`);
-                    }
-                } else {
-                    // For compendium links with hashes, keep the hash for internal routing
-                    const hash = val.substring(val.indexOf('#'));
-                    $(el).attr('href', hash);
-                }
-            } 
+            // Instead of replacing the URL, inject the URN as a Markdown Title!
+            if (matchedType) {
+                $(el).attr('title', `REF:${matchedType}`);
+            }
         } else {
-            // Handle relative image sources
+            // Image source handling
             if (!val.startsWith('http') && !val.startsWith('data:')) {
                 $(el).attr('src', 'https://www.dndbeyond.com' + val);
             }
@@ -561,8 +513,6 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     });
 
     // 12. ID AND ANCHOR NORMALIZATION
-    // Normalizes all IDs and hash links to lowercase. This guarantees that VS Code 
-    // previewers and internal LLM references perfectly align regardless of original casing.
     $content.find('[id]').each((_, el) => {
         const id = $(el).attr('id');
         if (id) $(el).attr('id', id.toLowerCase());
@@ -574,7 +524,6 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
             if (href.startsWith('#')) {
                 $(el).attr('href', href.toLowerCase());
             } else if (href.includes('#')) {
-                // Split by the first '#' only
                 const hashIndex = href.indexOf('#');
                 const baseUrl = href.substring(0, hashIndex);
                 const hash = href.substring(hashIndex);

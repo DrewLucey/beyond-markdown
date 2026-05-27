@@ -60,13 +60,27 @@ async function crawlLibrary() {
                         if (source.relativePath) {
                             const slug = source.relativePath.split('/').pop();
                             
-                            // Map the exact schema values required for AI routing
+                            // Map the exact schema values required for AI routing + comprehensive repo data
                             sourceMap[slug] = {
+                                id: source.id || null,
                                 title: source.name || slug,
+                                image: source.image || null,
+                                marketplaceUrl: source.marketplaceUrl || null,
+                                sku: source.sku || null,
+                                path: source.relativePath,
+                                isThirdParty: source.isThirdParty === true,
+                                publisher: source.publisher || "Unknown",
                                 ruleset: source.ruleset?.name || '5e',
+                                fullRulesetInfo: source.ruleset || null,
                                 type: source.type || 'unknown',
-                                isLegacy: source.isLegacy === true,
-                                path: source.relativePath
+                                isFree: source.isFree === true,
+                                isReleased: source.isReleased !== false,
+                                releaseDate: source.releaseDate || null,
+                                isOwned: source.isOwned === true,
+                                isSharedWithMe: source.isSharedWithMe === true,
+                                isFavorite: source.isFavorite === true,
+                                isOnWishlist: source.isOnWishlist === true,
+                                isLegacy: source.isLegacy === true
                             };
                         }
                     });
@@ -92,13 +106,28 @@ async function crawlLibrary() {
                 if (title && relativePath) {
                     const slug = relativePath.split('/').pop();
                     const ruleset = title.includes('2024') ? '2024' : '5e'; 
-                    // Fallbacks lack exact type/legacy, but keep the core routing alive
+                    
+                    // Fallbacks lack exact deep-data, but we maintain the identical schema structure
                     sourceMap[slug] = { 
+                        id: null,
                         title, 
+                        image: null,
+                        marketplaceUrl: null,
+                        sku: null,
+                        path: relativePath,
+                        isThirdParty: false,
+                        publisher: "Unknown",
                         ruleset, 
+                        fullRulesetInfo: null,
                         type: 'unknown', 
-                        isLegacy: false, 
-                        path: relativePath 
+                        isFree: false,
+                        isReleased: true,
+                        releaseDate: null,
+                        isOwned: true, // Assumed if visible in library
+                        isSharedWithMe: false,
+                        isFavorite: false,
+                        isOnWishlist: false,
+                        isLegacy: false
                     };
                 }
             });
