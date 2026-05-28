@@ -112,6 +112,19 @@ async function runBulkMuncher() {
                 const idMatch = item.url.match(/\/(\d+)-/);
                 const entityId = idMatch ? idMatch[1] : '';
 
+                // --- SOURCE & RULESET TAGGING ---
+                let sourceText = "";
+                const sourceEl = $content.find('.source, .spell-source, .monster-source, .equipment-source, .magic-item-source').first();
+                if (sourceEl.length > 0) {
+                    sourceText = sourceEl.text().replace(/\s+/g, ' ').trim();
+                }
+
+                let rulesetTag = "5e";
+                if (sourceText.includes('2024')) rulesetTag = '2024';
+                else if (sourceText.includes('2014')) rulesetTag = '2014';
+                
+                let isLegacyFlag = "false";
+
                 // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
                 const legacyBadge = $content.find('.badge, #legacy-badge');
                 const mainHeader = $content.find('h1').first();
@@ -125,6 +138,9 @@ async function runBulkMuncher() {
                 }
 
                 if (legacyBadge.length > 0) {
+                    isLegacyFlag = "true";
+                    if (rulesetTag === "5e") rulesetTag = "2014"; // Legacy badge implies older ruleset
+
                     // 2. Destroy the tooltips and links from the DOM entirely
                     $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
                     
@@ -149,7 +165,8 @@ async function runBulkMuncher() {
                     
                     markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
 
-                    const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}">\n${markdown}\n</ENTRY>`;
+                    // Include the new source ruleset metadata in the XML
+                    const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" source_book="${sourceText}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}">\n${markdown}\n</ENTRY>`;
                     
                     // --- THE ID PRESERVATION FIX ---
                     const idMatchForFile = item.url.match(/\/(\d+)-/);

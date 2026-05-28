@@ -169,6 +169,19 @@ async function runBulkPipeline() {
                         const idMatch = item.url.match(/\/(\d+)-/);
                         const entityId = idMatch ? idMatch[1] : '';
 
+                        // --- SOURCE & RULESET TAGGING ---
+                        let sourceText = "";
+                        const sourceEl = $content.find('.source, .spell-source, .monster-source, .magic-item-source, .equipment-source, .article-source').first();
+                        if (sourceEl.length > 0) {
+                            sourceText = sourceEl.text().replace(/\s+/g, ' ').trim();
+                        }
+
+                        let rulesetTag = "5e";
+                        if (sourceText.includes('2024')) rulesetTag = '2024';
+                        else if (sourceText.includes('2014')) rulesetTag = '2014';
+                        
+                        let isLegacyFlag = "false";
+
                         // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
                         const legacyBadge = $content.find('.badge, #legacy-badge');
                         const mainHeader = $content.find('h1').first();
@@ -182,6 +195,9 @@ async function runBulkPipeline() {
                         }
 
                         if (legacyBadge.length > 0) {
+                            isLegacyFlag = "true";
+                            if (rulesetTag === "5e") rulesetTag = "2014"; // Legacy badge heavily implies 2014 or older
+
                             // 2. Destroy the tooltips and links from the DOM entirely
                             $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
                             
@@ -214,16 +230,16 @@ async function runBulkPipeline() {
 
                         // ENVELOPING FOR STITCHER:
                         // Adds XML-style metadata tags so the Stitcher knows how to sort this
-                        const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}">\n${markdown}\n</ENTRY>`;
+                        const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}" source_book="${sourceText}">\n${markdown}\n</ENTRY>`;
                         
                         // --- THE ID PRESERVATION FIX ---
                         // Extract the numerical ID from the URL (e.g. /species/12345-orc -> 12345)
-                        const idMatch = item.url.match(/\/(\d+)-/);
-                        const entityId = idMatch ? `${idMatch[1]}-` : '';
+                        const idMatchForFile = item.url.match(/\/(\d+)-/);
+                        const entityIdPrefix = idMatchForFile ? `${idMatchForFile[1]}-` : '';
                         
                         const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
                         // Prepend the ID to the filename to prevent overwrites (e.g. "12345-Orc.md")
-                        const finalFileName = `${entityId}${safeName}.md`;
+                        const finalFileName = `${entityIdPrefix}${safeName}.md`;
                         
                         fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
                     }

@@ -19,6 +19,14 @@ const rl = readline.createInterface({
     output: process.stdout
 });
 
+// Allow pressing ESC to exit the CLI at any prompt
+process.stdin.on('keypress', (str, key) => {
+    if (key && key.name === 'escape') {
+        console.log(`\n\x1b[33mGoodbye!\x1b[0m`);
+        process.exit(0);
+    }
+});
+
 const ask = (query) => new Promise(resolve => rl.question(query, resolve));
 
 // ANSI Terminal Colors
@@ -86,20 +94,34 @@ function runScript(scriptPath, args = []) {
     console.log(`\n${colors.green}✔ Task Complete.${colors.reset}\n`);
 }
 
+async function checkRequiredMetadata() {
+    const mapPath = path.resolve(__dirname, 'sources/ruleset_map.json');
+    const configJsonPath = path.resolve(__dirname, 'sources/config.json');
+    
+    if (!fs.existsSync(mapPath) || !fs.existsSync(configJsonPath)) {
+        console.log(`\n${colors.red}⚠️  Missing Library Metadata!${colors.reset}`);
+        console.log(`You must run Option 1 (Update Library Metadata) to generate your 'ruleset_map.json' and 'config.json' files before proceeding.\n`);
+        await ask(`Press Enter to return to menu...`);
+        return false;
+    }
+    return true;
+}
+
 async function showMenu() {
     console.clear();
     console.log(`${colors.magenta}=================================================${colors.reset}`);
     console.log(`${colors.green}   D&D Beyond -> NotebookLM Markdown Pipeline    ${colors.reset}`);
     console.log(`${colors.magenta}=================================================${colors.reset}\n`);
     
-    console.log(`1. 📚 Update Library Metadata (Run this first to map owned books)`);
-    console.log(`2. 📖 Extract & Stitch a Single Sourcebook (e.g., phb-2024)`);
-    console.log(`3. 🐉 Extract & Stitch a Compendium (Monsters, Spells, Items)`);
-    console.log(`4. ⚙️  Run 2014->2024 Rules Converter on a Repository`);
-    console.log(`5. 🤖 BATCH CRAWL: Automatically extract & stitch ALL owned books`);
+    console.log(`1. Update Library Metadata (Run this first to map owned books)`);
+    console.log(`2. Extract & Stitch a Single Sourcebook (e.g., phb-2024)`);
+    console.log(`3. Extract & Stitch a Compendium (Monsters, Spells, Items)`);
+    console.log(`4. Run 2014->2024 Rules Converter on a Repository`);
+    console.log(`5. BATCH CRAWL: Automatically extract & stitch ALL owned books`);
+    console.log(`6. Compile a D&D Beyond Character to Markdown`);
     console.log(`0. Exit\n`);
 
-    const choice = await ask(`Select an option (0-5): `);
+    const choice = await ask(`Select an option (0-6): `);
 
     switch (choice.trim()) {
         case '1':
@@ -108,16 +130,23 @@ async function showMenu() {
             showMenu();
             break;
         case '2':
-            await promptSourcebook();
+            if (await checkRequiredMetadata()) await promptSourcebook();
+            else showMenu();
             break;
         case '3':
-            await promptCompendium();
+            if (await checkRequiredMetadata()) await promptCompendium();
+            else showMenu();
             break;
         case '4':
-            await promptConverter();
+            if (await checkRequiredMetadata()) await promptConverter();
+            else showMenu();
             break;
         case '5':
-            await batchCrawlAllBooks();
+            if (await checkRequiredMetadata()) await batchCrawlAllBooks();
+            else showMenu();
+            break;
+        case '6':
+            await promptCharacterCompiler();
             break;
         case '0':
             console.log(`${colors.yellow}Goodbye!${colors.reset}`);
@@ -189,12 +218,6 @@ async function batchCrawlAllBooks() {
     console.log(`\n${colors.yellow}--- BATCH CRAWLER: EXTRACT ALL BOOKS ---${colors.reset}`);
     
     const mapPath = path.resolve(__dirname, 'sources/ruleset_map.json');
-    if (!fs.existsSync(mapPath)) {
-        console.log(`${colors.red}Error: ruleset_map.json not found. Please run Option 1 (Update Library Metadata) first.${colors.reset}`);
-        await ask(`Press Enter to return to menu...`);
-        return showMenu();
-    }
-
     const mapData = JSON.parse(fs.readFileSync(mapPath, 'utf-8'));
     const books = Object.entries(mapData);
 
@@ -228,6 +251,20 @@ async function batchCrawlAllBooks() {
     }
 
     console.log(`\n${colors.green}🎉 BATCH CRAWL COMPLETE!${colors.reset}`);
+    await ask(`Press Enter to return to menu...`);
+    showMenu();
+}
+
+async function promptCharacterCompiler() {
+    console.log(`\n${colors.yellow}--- Compile Character to Markdown ---${colors.reset}`);
+    const input = await ask(`Enter the DDB Character ID/URL (or press Enter to select from your roster): `);
+    
+    if (input.trim()) {
+        runScript('downloader/character_compiler.js', [input.trim()]);
+    } else {
+        runScript('downloader/character_compiler.js');
+    }
+
     await ask(`Press Enter to return to menu...`);
     showMenu();
 }
