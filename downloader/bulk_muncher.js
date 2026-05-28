@@ -1,3 +1,7 @@
+/**
+ * bulk_muncher.js
+ * Handles paginated listings and wraps items for the central Repository Stitcher.
+ */
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -25,7 +29,8 @@ const CATEGORY_MAP = {
     '/spells': 'SPELL',
     '/monsters': 'MONSTER',
     '/magic-items': 'MAGIC_ITEM',
-    '/equipment': 'EQUIPMENT'
+    '/equipment': 'EQUIPMENT',
+    '/species': 'SPECIES' // Add this
 };
 
 async function runBulkMuncher() {
@@ -50,17 +55,23 @@ async function runBulkMuncher() {
             const response = await axios.get(listUrl, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
             const $ = cheerio.load(response.data);
 
-            const links = $('.list-row, .info, .monster-name').find('a.link');
-            if (links.length === 0) {
-                hasNext = false;
-                break;
-            }
+            // FIX: Support both legacy tables and the new React listing grids
+            const links = $('.list-row, .info, .monster-name').find('a.link').length > 0 
+                ? $('.list-row, .info, .monster-name').find('a.link') 
+                : $('.listing-card__link');
+
+            if (links.length === 0) { hasNext = false; break; }
 
             links.each((_, el) => {
                 const href = $(el).attr('href');
-                const name = $(el).text().trim();
-                if (href && href.startsWith(TARGET_DIR + '/')) {
-                    itemQueue.push({ name, url: BASE_URL + href });
+                if (!href) return;
+
+                const relativeUrl = href.replace('https://www.dndbeyond.com', '');
+                const name = $(el).find('.listing-card__title').text().trim() || $(el).text().trim();
+                
+                if (relativeUrl.startsWith(TARGET_DIR + '/')) {
+                    const fullUrl = href.startsWith('http') ? href : BASE_URL + href;
+                    itemQueue.push({ name, url: fullUrl });
                 }
             });
 
@@ -74,42 +85,22 @@ async function runBulkMuncher() {
         }
     }
 
-    console.log(`\n\nPhase 1 Complete. Found ${itemQueue.length} items to extract.`);
-    console.log(`Phase 2: Extracting Data (This will take approximately ${Math.ceil(itemQueue.length / 60)} minutes)...\n`);
-
-    // Phase 2: Extraction
+    console.log(`\nFound ${itemQueue.length} items. Starting extraction...\n`);
     let successCount = 0;
+
+    // Phase 2: Download each item
     for (let i = 0; i < itemQueue.length; i++) {
         const item = itemQueue[i];
         
-        // Exclude test benches and duplicate copies
-        if (item.name.toLowerCase().includes('test') || item.name.toLowerCase().includes('copy_of')) continue;
-
         try {
-            const res = await axios.get(item.url, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
-            
-            if (res.request.res.responseUrl.includes('marketplace.dndbeyond.com')) {
-                console.log(`\n[${i+1}/${itemQueue.length}] Skipped (Unowned): ${item.name}`);
-                continue;
-            }
-
-            const $s = cheerio.load(res.data);
-            
-            // --- THE WRAPPER FIX ---
-            // Prioritize outer details wrappers before falling back to the raw statblock
-            const contentSelectors = [
-                '.monster-details',
-                '.magic-item-details',
-                '.equipment-details',
-                '.spell-details',
-                '.details',
-                '.mon-stat-block',
-                '.p-article-content'
-            ];
+            const itemRes = await axios.get(item.url, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
+            const $s = cheerio.load(itemRes.data);
             
             let $content = null;
-            for (const selector of contentSelectors) {
-                const found = $s(selector);
+            const contentSelectors = ['.page-content', '.p-article-content', '.primary-content', 'main', 'article'];
+            
+            for (const sel of contentSelectors) {
+                const found = $s(sel);
                 if (found.length > 0) {
                     $content = found.first();
                     break;
@@ -117,6 +108,53 @@ async function runBulkMuncher() {
             }
 
             if ($content && $content.length > 0) {
+                // --- EXTRACT ID FOR TARGET ANCHOR ---
+                const idMatch = item.url.match(/\/(\d+)-/);
+                const entityId = idMatch ? idMatch[1] : '';
+
+                // --- SOURCE & RULESET TAGGING ---
+                let sourceText = "";
+                const sourceEl = $content.find('.source, .spell-source, .monster-source, .equipment-source, .magic-item-source').first();
+                if (sourceEl.length > 0) {
+                    sourceText = sourceEl.text().replace(/\s+/g, ' ').trim();
+                }
+
+                let rulesetTag = "5e";
+                if (sourceText.includes('2024')) rulesetTag = '2024';
+                else if (sourceText.includes('2014')) rulesetTag = '2014';
+                
+                let isLegacyFlag = "false";
+
+                // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
+                const legacyBadge = $content.find('.badge, #legacy-badge');
+                const mainHeader = $content.find('h1').first();
+
+                if (mainHeader.length > 0) {
+                    // 1. Force the H1 to use our unique, scoped ID (e.g., id="Aasimar-1751434")
+                    const safeNameForAnchor = item.name.replace(/\s+\(Legacy\)/i, '').replace(/[^a-zA-Z0-9]/g, '');
+                    if (entityId && safeNameForAnchor) {
+                        mainHeader.attr('id', `${safeNameForAnchor}-${entityId}`);
+                    }
+                }
+
+                if (legacyBadge.length > 0) {
+                    isLegacyFlag = "true";
+                    if (rulesetTag === "5e") rulesetTag = "2014"; // Legacy badge implies older ruleset
+
+                    // 2. Destroy the tooltips and links from the DOM entirely
+                    $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
+                    
+                    // 3. Extract just the raw text of the header
+                    let baseTitle = mainHeader.contents().filter(function() { return this.nodeType === 3; }).text().replace(/\s+/g, ' ').trim();
+                    
+                    // 4. Rewrite the header cleanly
+                    if (baseTitle) mainHeader.text(`${baseTitle} (Legacy)`);
+                    
+                    // 5. Remove the badge container so Turndown doesn't read the word "Legacy" twice
+                    legacyBadge.remove();
+                }
+                // ------------------------------
+                
                 const cleanHtml = processContent($s, $content, item.url, category);
                 
                 if (cleanHtml) {
@@ -127,10 +165,16 @@ async function runBulkMuncher() {
                     
                     markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
 
-                    const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}">\n${markdown}\n</ENTRY>`;
+                    // Include the new source ruleset metadata in the XML
+                    const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" source_book="${sourceText}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}">\n${markdown}\n</ENTRY>`;
                     
-                    const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '');
-                    fs.writeFileSync(path.join(outputDir, `${safeName}.md`), wrappedMarkdown);
+                    // --- THE ID PRESERVATION FIX ---
+                    const idMatchForFile = item.url.match(/\/(\d+)-/);
+                    const entityIdPrefix = idMatchForFile ? `${idMatchForFile[1]}-` : '';
+                    const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
+                    const finalFileName = `${entityIdPrefix}${safeName}.md`;
+                    
+                    fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
                     successCount++;
                     process.stdout.write(`\r[${i+1}/${itemQueue.length}] Extracted: ${item.name.substring(0, 40).padEnd(40)}`);
                 }
@@ -142,7 +186,7 @@ async function runBulkMuncher() {
         await new Promise(r => setTimeout(r, 1000));
     }
 
-    console.log(`\n\nSuccess! ${successCount} items safely extracted to ${outputDir}`);
+    console.log(`\n\nSuccess! ${successCount} items safely processed.`);
 }
 
 runBulkMuncher();

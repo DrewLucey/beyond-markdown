@@ -53,6 +53,7 @@ async function getAuthToken() {
 }
 
 const ENDPOINTS = {
+    classes: 'https://character-service.dndbeyond.com/character/v5/game-data/classes',
     spells: 'https://character-service.dndbeyond.com/character/v5/game-data/spells',
     items: 'https://character-service.dndbeyond.com/character/v5.1/game-data/items',
     feats: 'https://character-service.dndbeyond.com/character/v5/game-data/feats',
@@ -160,7 +161,7 @@ async function runApiFetcher() {
             const lowerName = item.name.toLowerCase();
             if (lowerName.includes('test') || lowerName.includes('copy_of')) continue;
 
-            const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim(); 
+            const safeName = item.slug.replace(/[<>:"/\\|?*]+/g, '').trim(); 
             const filePath = path.join(outputDir, `${safeName}.md`);
             
             let metaData = "", desc = item.description || item.snippet || item.characteristicsDescription || "";
@@ -219,7 +220,7 @@ async function runApiFetcher() {
             }
 
             const markdownDesc = convertToMarkdown(desc);
-            const finalContent = `<ENTRY type="${TARGET_TYPE.toUpperCase()}" name="${item.name}" id="${item.id || ''}">\n${metaData}${markdownDesc}\n</ENTRY>`;
+            const finalContent = `<ENTRY type="${TARGET_TYPE.toUpperCase()}" name="${item.name}" id="${item.id || ''}">\n${metaData}${markdownDesc}\n</ENTRY>\n<JSON>\n${JSON.stringify(item)}\n</JSON>`;
 
             fs.writeFileSync(filePath, finalContent);
             successCount++;

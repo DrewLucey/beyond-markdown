@@ -44,24 +44,11 @@ turndownService.addRule('headingIds', {
         const id = node.getAttribute('id');
         const cleanContent = content.replace(/\[\]\(.*?\)/g, '').trim();
         return id 
-            ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n`
+            ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n` 
             : `\n\n${prefix} ${cleanContent}\n\n`;
     }
 });
 
-// Rule: Strip Empty Tooltips
-turndownService.addRule('emptyTooltips', {
-    filter: 'a',
-    replacement: function(content, node) {
-        const href = node.getAttribute('href');
-        if (href && (href.startsWith('#') || href.includes('tooltip'))) {
-            return content.trim(); 
-        }
-        return `[${content}](${href})`;
-    }
-});
-
-// 3. API Execution Wrapper
 async function runBulkPipeline() {
     const args = process.argv.slice(2);
     if (args.length === 0) {
@@ -115,18 +102,25 @@ async function runBulkPipeline() {
             const categoryBase = `${targetPath}/`; // e.g., '/feats/'
             
             $('a').each((_, el) => {
-                let name = $(el).text().replace(/\s+/g, ' ').trim();
                 let url = $(el).attr('href');
+                if (!url) return;
+
+                // FIX 1: DDB's new grids use absolute URLs. Normalize to a relative path first.
+                const relativeUrl = url.replace('https://www.dndbeyond.com', '');
                 
-                // If it's a link to an item in our target category (e.g. /feats/123-alert)
-                if (url && url.startsWith(categoryBase) && url.length > categoryBase.length) {
+                // If it's a link to an item in our target category (e.g. /species/1830524-geleton)
+                if (relativeUrl.startsWith(categoryBase) && relativeUrl.length > categoryBase.length) {
                     
                     // Ignore pagination links, comments, and marketplace redirects
-                    if (url.includes('?') || url.includes('#') || url.includes('/marketplace/')) return;
+                    if (relativeUrl.includes('?') || relativeUrl.includes('#') || relativeUrl.includes('/marketplace/')) return;
+                    
+                    // FIX 2: Target the specific title class to prevent grabbing subtitle metadata
+                    let name = $(el).find('.listing-card__title').text().trim() || $(el).text().replace(/\s+/g, ' ').trim();
                     
                     // Ignore empty links or icon-only links
                     if (!name || name.length < 2) return; 
                     
+                    // Ensure the final URL we push to the queue is absolute
                     if (!url.startsWith('http')) url = 'https://www.dndbeyond.com' + url;
                     
                     // Deduplicate (DDB often renders desktop/mobile lists twice in the DOM)
@@ -164,21 +158,70 @@ async function runBulkPipeline() {
                     
                     for (const sel of selectors) {
                         const found = $s(sel);
-                        if (found.length > 0) { 
-                            $content = found.first(); 
-                            break; 
+                        if (found.length > 0) {
+                            $content = found.first();
+                            break;
                         }
                     }
 
-                    if (!$content) {
-                        console.log(`  > Skipped (No valid content container found)`);
-                        continue;
-                    }
+                    if ($content && $content.length > 0) {
+                        // --- EXTRACT ID FOR TARGET ANCHOR ---
+                        const idMatch = item.url.match(/\/(\d+)-/);
+                        const entityId = idMatch ? idMatch[1] : '';
 
-                    const category = categoryName.toUpperCase();
-                    const cleanHtml = processContent($s, $content, item.url, category);
+                        // --- SOURCE & RULESET TAGGING ---
+                        let sourceText = "";
+                        const sourceEl = $content.find('.source, .spell-source, .monster-source, .magic-item-source, .equipment-source, .article-source').first();
+                        if (sourceEl.length > 0) {
+                            sourceText = sourceEl.text().replace(/\s+/g, ' ').trim();
+                        }
 
-                    if (cleanHtml) {
+                        let rulesetTag = "5e";
+                        if (sourceText.includes('2024')) rulesetTag = '2024';
+                        else if (sourceText.includes('2014')) rulesetTag = '2014';
+                        
+                        let isLegacyFlag = "false";
+
+                        // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
+                        const legacyBadge = $content.find('.badge, #legacy-badge');
+                        const mainHeader = $content.find('h1').first();
+
+                        if (mainHeader.length > 0) {
+                            // 1. Force the H1 to use our unique, scoped ID (e.g., id="Aasimar-1751434")
+                            const safeNameForAnchor = item.name.replace(/\s+\(Legacy\)/i, '').replace(/[^a-zA-Z0-9]/g, '');
+                            if (entityId && safeNameForAnchor) {
+                                mainHeader.attr('id', `${safeNameForAnchor}-${entityId}`);
+                            }
+                        }
+
+                        if (legacyBadge.length > 0) {
+                            isLegacyFlag = "true";
+                            if (rulesetTag === "5e") rulesetTag = "2014"; // Legacy badge heavily implies 2014 or older
+
+                            // 2. Destroy the tooltips and links from the DOM entirely
+                            $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
+                            
+                            // 3. Extract just the raw text of the header
+                            let baseTitle = mainHeader.contents().filter(function() {
+                                return this.nodeType === 3; // Grabs strictly the text node
+                            }).text().replace(/\s+/g, ' ').trim();
+                            
+                            // 4. Rewrite the header cleanly
+                            if (baseTitle) {
+                                mainHeader.text(`${baseTitle} (Legacy)`);
+                            }
+                            
+                            // 5. Remove the badge container so Turndown doesn't read the word "Legacy" twice
+                            legacyBadge.remove();
+                        }
+                        // ---------------------------
+                        
+                        const category = categoryName.toUpperCase();
+                        
+                        // Pass through handler pipeline to scrub layout artifacts
+                        const cleanHtml = processContent($s, $content, item.url, category);
+                        
+                        // Generate pure Markdown
                         let markdown = turndownService.turndown(cleanHtml);
                         
                         // --- THE ASTERISK FIX ---
@@ -187,10 +230,18 @@ async function runBulkPipeline() {
 
                         // ENVELOPING FOR STITCHER:
                         // Adds XML-style metadata tags so the Stitcher knows how to sort this
-                        const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}">\n${markdown}\n</ENTRY>`;
+                        const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}" source_book="${sourceText}">\n${markdown}\n</ENTRY>`;
+                        
+                        // --- THE ID PRESERVATION FIX ---
+                        // Extract the numerical ID from the URL (e.g. /species/12345-orc -> 12345)
+                        const idMatchForFile = item.url.match(/\/(\d+)-/);
+                        const entityIdPrefix = idMatchForFile ? `${idMatchForFile[1]}-` : '';
                         
                         const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
-                        fs.writeFileSync(path.join(outputDir, `${safeName}.md`), wrappedMarkdown);
+                        // Prepend the ID to the filename to prevent overwrites (e.g. "12345-Orc.md")
+                        const finalFileName = `${entityIdPrefix}${safeName}.md`;
+                        
+                        fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
                     }
                 } catch (e) { 
                     console.error(`  > Error on ${item.name}: ${e.message}`); 
