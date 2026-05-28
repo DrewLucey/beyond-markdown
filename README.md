@@ -35,8 +35,10 @@ By using this software, you agree to take full responsibility for the data you e
 
 1. Clone this repository to your local machine.  
 2. Ensure you have [Node.js](https://nodejs.org/) installed.  
-3. Install the required dependencies:  
+3. Install the required dependencies:
+```
    npm install
+```
 
 ## **🔑 Authentication Setup**
 
@@ -53,7 +55,7 @@ To access your owned books, you must provide your D\&D Beyond CobaltSession cook
 Everything is controlled through the interactive Master Hub. Simply run:
 
 ```
-   node index.js
+   npm run beyond-markdown
 ```
 
 ### **The Main Menu**
