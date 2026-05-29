@@ -27,8 +27,7 @@ if (match) {
 
 const formattedTitle = repoBase.split(/[-_]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
-// NOTE: Using .md.txt to bypass Google Drive's NotebookLM filter!
-const finalFileName = `${formattedTitle} (${ruleset}).md.txt`;
+const finalFileName = `${formattedTitle} (${ruleset}).md`;
 const outputFile = path.resolve(__dirname, `../sources/repositories/${finalFileName}`);
 // -----------------------------------------------------
 
@@ -45,7 +44,7 @@ async function runRepoStitcher() {
             console.log(`\nℹ️ Overwriting existing master file: ${finalFileName}\n`);
         }
 
-        let files = fs.readdirSync(sourceDir).filter(f => f.endsWith('.md') && !f.endsWith('.md.txt'));
+        let files = fs.readdirSync(sourceDir).filter(f => f.endsWith('.md') && !f.startsWith('_master__'));
         
         files.sort((a, b) => {
             const nameA = a.replace(/^\d+-/, ''); 

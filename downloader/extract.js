@@ -73,6 +73,7 @@ async function runPipeline() {
         console.log(`--- Starting Adventure Extraction Pipeline ---`);
         console.log(`Targeting: ${TARGET_URL}`);
         
+        // 1. Grab the root page first to define our scope
         const response = await axios.get(TARGET_URL, {
             headers: { 'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '' }
         });
@@ -81,7 +82,7 @@ async function runPipeline() {
         const urlParts = TARGET_URL.replace(/\/$/, "").split('/');
         const bookSlug = urlParts.pop();
         
-        // --- NEW DIRECTORY HIERARCHY LOGIC ---
+        // 2. Determine 5e vs 5.5e Directory Hierarchy
         let rulesetFolder = "5e";
         const mapFilePath = path.resolve(__dirname, '../sources/ruleset_map.json');
         if (fs.existsSync(mapFilePath)) {
@@ -97,26 +98,27 @@ async function runPipeline() {
         
         const outputDir = path.resolve(__dirname, `../sources/${rulesetFolder}/atomic/${bookSlug}`);
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-        // -------------------------------------
 
         const manifest = new Map();
         manifest.set(TARGET_URL, "Front Matter & Table of Contents");
 
-        const rootPath = new URL(TARGET_URL).pathname.replace(/\/$/, "");
-        const tocSelectors = ['.compendium-toc-full', '.compendium-toc-full-text', '.list-of-contents', '.p-article-content'];
-        
-        tocSelectors.forEach(selector => {
-            $(selector).find('a').each((i, el) => {
-                let href = $(el).attr('href');
-                if (!href) return;
+        // 3. Intelligent TOC Harvester (CSS-Free)
+        $('a').each((i, el) => {
+            let href = $(el).attr('href');
+            if (!href) return;
+            
+            try {
                 const abs = new URL(href, 'https://www.dndbeyond.com');
                 const cleanUrl = abs.origin + abs.pathname;
                 const cleanPath = abs.pathname.replace(/\/$/, "");
 
-                if (cleanPath.startsWith('/sources/') || cleanPath.split('/').length > 2) {
+                // Validates URL by verifying it explicitly sits inside the book's root slug directory
+                if (cleanPath.includes(`/${bookSlug}/`)) {
                     if (!manifest.has(cleanUrl)) manifest.set(cleanUrl, $(el).text().trim());
                 }
-            });
+            } catch (e) {
+                // Ignore malformed hrefs
+            }
         });
 
         const uniqueSections = Array.from(manifest.entries());
@@ -145,9 +147,7 @@ async function runPipeline() {
 
                 const $s = cheerio.load(chapterRes.data);
                 
-                // --- THE WRAPPER FIX (Synchronized with bulk_muncher.js) ---
-                // We prioritize the outer details wrappers before falling back to the raw statblock or article text.
-                // This ensures we capture Lore, Tags, Environments, and Sourcebooks embedded in adventures.
+                // Prioritize outer wrapper content
                 const contentSelectors = [
                     '.monster-details',
                     '.magic-item-details',
@@ -180,12 +180,15 @@ async function runPipeline() {
                 if (sanitizedHtml) {
                     let markdown = turndownService.turndown(sanitizedHtml);
                     
-                    // --- THE ESCAPE CHARACTER FIX ---
                     // Un-escapes Turndown's aggressive backslashes on normal asterisks and brackets
                     markdown = markdown.replace(/\\\*/g, '*'); 
                     markdown = markdown.replace(/\\\[/g, '[');
                     markdown = markdown.replace(/\\\]/g, ']');
                     
+                    // --- NAMESPACE HEADING IDS ---
+                    // Converts {#whatdwellshere} -> {#wdotmm:dungeon-level:whatdwellshere}
+                    markdown = markdown.replace(/\{#([^}]+)\}/g, `{#${bookSlug}:${fileSlug}:$1}`);
+
                     markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
                     fs.writeFileSync(filePath, markdown);
                 }

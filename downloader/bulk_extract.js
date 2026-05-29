@@ -226,11 +226,6 @@ async function runBulkPipeline() {
                         
                         // --- THE ASTERISK FIX ---
                         markdown = markdown.replace(/\\\*/g, '*'); 
-                        markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
-
-                        // ENVELOPING FOR STITCHER:
-                        // Adds XML-style metadata tags so the Stitcher knows how to sort this
-                        const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}" source_book="${sourceText}">\n${markdown}\n</ENTRY>`;
                         
                         // --- THE ID PRESERVATION FIX ---
                         // Extract the numerical ID from the URL (e.g. /species/12345-orc -> 12345)
@@ -240,6 +235,17 @@ async function runBulkPipeline() {
                         const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
                         // Prepend the ID to the filename to prevent overwrites (e.g. "12345-Orc.md")
                         const finalFileName = `${entityIdPrefix}${safeName}.md`;
+                        
+                        // --- NAMESPACE HEADING IDS ---
+                        // Converts {#actions} -> {#monsters:12345-orc:actions}
+                        const itemSlug = finalFileName.replace('.md', '').toLowerCase();
+                        markdown = markdown.replace(/\{#([^}]+)\}/g, `{#${categoryName.toLowerCase()}:${itemSlug}:$1}`);
+
+                        markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
+
+                        // ENVELOPING FOR STITCHER:
+                        // Adds XML-style metadata tags so the Stitcher knows how to sort this
+                        const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}" source_book="${sourceText}">\n${markdown}\n</ENTRY>`;
                         
                         fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
                     }

@@ -500,9 +500,17 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
                 }
             }
 
-            // Instead of replacing the URL, inject the URN as a Markdown Title!
+            // --- NAMESPACED URN INJECTION ---
             if (matchedType) {
-                $(el).attr('title', `REF:${matchedType}`);
+                try {
+                    const cleanUrl = val.split('?')[0].split('#')[0].replace(/\/$/, "");
+                    const pathParts = cleanUrl.split('/');
+                    const entitySlug = pathParts[pathParts.length - 1];
+                    // Result: title="ref:monster:16817-bugbear"
+                    $(el).attr('title', `ref:${matchedType.toLowerCase()}:${entitySlug}`);
+                } catch(e) {
+                    $(el).attr('title', `ref:${matchedType.toLowerCase()}`);
+                }
             }
         } else {
             // Image source handling

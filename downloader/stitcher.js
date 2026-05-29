@@ -1,7 +1,7 @@
 /**
  * stitcher.js
  * Assembles atomic Markdown files into a macro-level sourcebook based on the index.
- * Final: Auto-Overwrite, Beautiful Naming, & Google Drive (.md.txt) Sync
+ * Final: Hierarchy Rulesets, Google Drive Sync, & Namespaced AI Anchors
  */
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
@@ -31,8 +31,8 @@ if (fs.existsSync(mapFilePath)) {
         const rulesMap = JSON.parse(fs.readFileSync(mapFilePath, 'utf-8'));
         if (rulesMap[TARGET_BOOK.toLowerCase()]) {
             bookMeta = rulesMap[TARGET_BOOK.toLowerCase()];
-            // Strip illegal characters from the title for safe file saving
             if (bookMeta.title) {
+                // Strip illegal characters from the title for safe file saving
                 bookTitle = bookMeta.title.replace(/[<>:"/\\|?*]+/g, '').trim(); 
             }
         }
@@ -40,16 +40,11 @@ if (fs.existsSync(mapFilePath)) {
         console.warn("Could not read ruleset_map.json. Proceeding with default tags.");
     }
 } else {
-    console.warn("ruleset_map.json not found. Run `node downloader/library.js` for better naming.");
+    console.warn("ruleset_map.json not found. Run `node downloader/library.js` for better AI metadata and naming.");
 }
 
-// --- NEW DIRECTORY HIERARCHY LOGIC ---
-const rulesetFolder = bookMeta.ruleset.includes('5.5') ? '5.5e' : '5e';
-const sourceDir = path.resolve(__dirname, `../sources/${rulesetFolder}/atomic/${TARGET_BOOK}`);
-
-// Restored native .md extension!
 const finalFileName = `${bookTitle} (${bookMeta.ruleset}).md`;
-const outputFile = path.resolve(__dirname, `../sources/${rulesetFolder}/${finalFileName}`);
+const outputFile = path.resolve(__dirname, `../sources/${TARGET_BOOK}/${finalFileName}`);
 // ---------------------------------------------------------
 
 function buildStitcherManifest(dirPath) {
@@ -63,24 +58,33 @@ function buildStitcherManifest(dirPath) {
         throw new Error(`Critical Error: index.md not found in ${dirPath}. The stitcher relies on the index to determine reading order.`);
     }
 
-    const availableFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.md') && !f.endsWith('.md.txt'));
+    // Capture every actual .md file, deliberately ignoring the master outputs so we don't stitch the master into the master
+    const availableFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.md') && !f.startsWith('_master__'));
     
     console.log(`Found ${availableFiles.length} atomic files. Mapping reading order from index.md...`);
 
     const indexContent = fs.readFileSync(indexFilePath, 'utf-8');
     const htmlContent = marked.parse(indexContent);
+    
+    // --> THIS IS THE VITAL LINE THAT WENT MISSING LOCALLY <--
     const $ = cheerio.load(htmlContent);
 
     const chapterSlugs = ['index.md'];
 
+    // Locate chapter links inside the Table of Contents
     $('a').each((_, el) => {
         let href = $(el).attr('href');
         if (!href) return;
         
         let cleanSlug = href.split('?')[0].split('#')[0].replace(/\/$/, ""); 
         const pathParts = cleanSlug.split('/');
-        const targetSlug = pathParts[pathParts.length - 1]; 
+        let targetSlug = pathParts[pathParts.length - 1]; 
         
+        // Ensure root book URLs map to the index.md file
+        if (targetSlug.toLowerCase() === TARGET_BOOK.toLowerCase()) {
+            targetSlug = 'index';
+        }
+
         const matchedFileName = availableFiles.find(f => f.replace('.md', '').toLowerCase() === targetSlug.toLowerCase());
 
         if (matchedFileName && matchedFileName !== 'index.md') {
@@ -105,6 +109,7 @@ function buildStitcherManifest(dirPath) {
         }
     }
 
+    // Catch-All: Append any files that downloaded but weren't linked in the index.md
     availableFiles.forEach(file => {
         if (!chapterSlugs.includes(file)) {
             console.log(`[Info] Automatically appending unlinked file: ${file}`);
@@ -117,47 +122,71 @@ function buildStitcherManifest(dirPath) {
     return manifest;
 }
 
-function transformMarkdownLinks(content, manifest) {
+/**
+ * Parses and transforms relative Markdown links pointing to other chapter files.
+ */
+function transformMarkdownLinks(content, manifest, currentSlug, bookSlug) {
     const validChapterIds = new Set(manifest.map(m => m.slug.replace('.md', '')));
-    const lines = content.split('\n');
-    
-    for (let i = 0; i < lines.length; i++) {
-        lines[i] = lines[i].replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, url) => {
-            if (url.startsWith('#')) return match;
 
-            let targetSlug = "";
-            let hash = "";
+    return content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, rawUrlGroup) => {
+        let url = rawUrlGroup;
+        let titleAttr = "";
+        
+        // Safely extract the URN tooltip title if one exists
+        const spaceIndex = rawUrlGroup.indexOf(' ');
+        if (spaceIndex !== -1 && rawUrlGroup.endsWith('"')) { 
+            url = rawUrlGroup.substring(0, spaceIndex);
+            titleAttr = rawUrlGroup.substring(spaceIndex).trim();
+        }
 
-            if (url.includes('/sources/')) {
-                let cleanUrl = url.split('?')[0]; 
-                const hashIndex = cleanUrl.indexOf('#');
-                
-                hash = hashIndex !== -1 ? cleanUrl.substring(hashIndex) : '';
-                cleanUrl = hashIndex !== -1 ? cleanUrl.substring(0, hashIndex) : cleanUrl;
-                
-                const pathParts = cleanUrl.replace(/\/$/, "").split('/');
-                targetSlug = pathParts[pathParts.length - 1];
-            } else if (url.endsWith('.md') || url.includes('.md#')) {
-                let cleanUrl = url.split('?')[0];
-                const hashIndex = url.indexOf('#');
-                
-                hash = hashIndex !== -1 ? url.substring(hashIndex) : '';
-                targetSlug = cleanUrl.split('#')[0].replace('.md', '');
+        // Handle same-page jump links
+        if (url.startsWith('#')) {
+            const finalUrl = `#${bookSlug}:${currentSlug}:${url.substring(1).toLowerCase()}`;
+            return titleAttr ? `[${text}](${finalUrl} ${titleAttr})` : `[${text}](${finalUrl})`;
+        }
+
+        let targetSlug = "";
+        let hash = "";
+
+        if (url.includes('/sources/') || url.includes('/compendium/')) {
+            let cleanUrl = url.split('?')[0]; 
+            const hashIndex = cleanUrl.indexOf('#');
+            
+            hash = hashIndex !== -1 ? cleanUrl.substring(hashIndex) : '';
+            cleanUrl = hashIndex !== -1 ? cleanUrl.substring(0, hashIndex) : cleanUrl;
+            
+            const pathParts = cleanUrl.replace(/\/$/, "").split('/');
+            targetSlug = pathParts[pathParts.length - 1];
+
+            if (targetSlug.toLowerCase() === bookSlug.toLowerCase()) {
+                targetSlug = 'index';
+            }
+        } else if (url.endsWith('.md') || url.includes('.md#')) {
+            let cleanUrl = url.split('?')[0];
+            const hashIndex = url.indexOf('#');
+            
+            hash = hashIndex !== -1 ? url.substring(hashIndex) : '';
+            targetSlug = cleanUrl.split('#')[0].replace('.md', '');
+        }
+
+        if (targetSlug && validChapterIds.has(targetSlug)) {
+            // Apply the new Namespace logic
+            let finalUrl = "";
+            if (hash) {
+                finalUrl = `#${bookSlug}:${targetSlug}:${hash.substring(1).toLowerCase()}`;
+            } else {
+                finalUrl = `#${bookSlug}:${targetSlug}`;
             }
 
-            if (targetSlug && validChapterIds.has(targetSlug)) {
-                if (hash) {
-                    return `[${text}](${hash})`;
-                } else {
-                    return `[${text}](#${targetSlug})`;
-                }
+            if (titleAttr) {
+                return `[${text}](${finalUrl} ${titleAttr})`;
+            } else {
+                return `[${text}](${finalUrl})`;
             }
+        }
 
-            return match;
-        });
-    }
-
-    return lines.join('\n');
+        return match;
+    });
 }
 
 async function runStitcher() {
@@ -173,6 +202,7 @@ async function runStitcher() {
         const manifest = buildStitcherManifest(sourceDir);
         console.log(`Manifest built: ${manifest.length} chapters loaded.\n`);
 
+        // Namespaced XML Wrapper
         let masterContent = `<SOURCEBOOK id="${TARGET_BOOK.toUpperCase()}" ruleset="${bookMeta.ruleset}" type="${bookMeta.type}" legacy="${bookMeta.isLegacy}">\n\n`;
 
         for (let i = 0; i < manifest.length; i++) {
@@ -182,10 +212,12 @@ async function runStitcher() {
             console.log(`[${i+1}/${manifest.length}] Stitching: ${title}`);
             
             let chapterText = fs.readFileSync(filePath, 'utf-8');
+            const chapterSlug = slug.replace('.md', '');
             
-            chapterText = transformMarkdownLinks(chapterText, manifest);
+            chapterText = transformMarkdownLinks(chapterText, manifest, chapterSlug, TARGET_BOOK);
             
-            masterContent += `<CHAPTER id="${slug.replace('.md', '')}" title="${title}">\n\n`;
+            // Namespaced Chapter Wrapper
+            masterContent += `<CHAPTER id="${TARGET_BOOK}:${chapterSlug}" title="${title}">\n\n`;
             masterContent += chapterText;
             masterContent += `\n\n</CHAPTER>\n\n`;
             masterContent += `--- \n\n`; 
