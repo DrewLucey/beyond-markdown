@@ -162,7 +162,7 @@ async function showMenu() {
 
 async function promptSourcebook() {
     console.log(`\n${colors.yellow}--- Extract & Stitch Sourcebook ---${colors.reset}`);
-    const bookUrl = await ask(`Enter the DDB URL or slug (e.g., https://www.dndbeyond.com/sources/dnd/phb-2024): `);
+    const bookUrl = await ask(`Enter the DDB URL or slug (e.g., https://www.dndbeyond.com/sources/dnd/phb-2024 or frhof): `);
     
     if (!bookUrl) return showMenu();
 
@@ -171,8 +171,32 @@ async function promptSourcebook() {
         slug = bookUrl.replace(/\/$/, "").split('/').pop();
     }
 
+    let fullUrl = bookUrl;
+    
+    // If the user just typed a slug, intelligently look up the exact path from the library map
+    if (!bookUrl.startsWith('http')) {
+        const mapPath = path.resolve(__dirname, 'sources/ruleset_map.json');
+        let foundPath = false;
+        
+        if (fs.existsSync(mapPath)) {
+            try {
+                const rulesMap = JSON.parse(fs.readFileSync(mapPath, 'utf-8'));
+                if (rulesMap[slug] && rulesMap[slug].path) {
+                    fullUrl = `https://www.dndbeyond.com${rulesMap[slug].path}`;
+                    foundPath = true;
+                }
+            } catch (e) {
+                // Silently fallback if JSON fails to parse
+            }
+        }
+
+        // If it's a completely unknown slug not in the map, guess the standard first-party path
+        if (!foundPath) {
+            fullUrl = `https://www.dndbeyond.com/sources/dnd/${bookUrl}`;
+        }
+    }
+
     // 1. Run Extractor
-    const fullUrl = bookUrl.startsWith('http') ? bookUrl : `https://www.dndbeyond.com/sources/${bookUrl}`;
     runScript('downloader/extract.js', [fullUrl]);
 
     // 2. Run Stitcher
@@ -219,9 +243,11 @@ async function batchCrawlAllBooks() {
     
     const mapPath = path.resolve(__dirname, 'sources/ruleset_map.json');
     const mapData = JSON.parse(fs.readFileSync(mapPath, 'utf-8'));
-    const books = Object.entries(mapData);
+    
+    // Filter out unowned/unshared books so we don't hit marketplace redirects
+    const books = Object.entries(mapData).filter(([id, meta]) => meta.isOwned || meta.isSharedWithMe);
 
-    console.log(`${colors.cyan}Found ${books.length} books in your library metadata.${colors.reset}`);
+    console.log(`${colors.cyan}Found ${books.length} accessible books in your library metadata.${colors.reset}`);
     const confirm = await ask(`This will take a long time and download gigabytes of data. Proceed? (y/n): `);
 
     if (confirm.toLowerCase() !== 'y') {

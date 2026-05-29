@@ -81,8 +81,23 @@ async function runPipeline() {
         const urlParts = TARGET_URL.replace(/\/$/, "").split('/');
         const bookSlug = urlParts.pop();
         
-        const outputDir = path.resolve(__dirname, '../sources', bookSlug);
+        // --- NEW DIRECTORY HIERARCHY LOGIC ---
+        let rulesetFolder = "5e";
+        const mapFilePath = path.resolve(__dirname, '../sources/ruleset_map.json');
+        if (fs.existsSync(mapFilePath)) {
+            try {
+                const rulesMap = JSON.parse(fs.readFileSync(mapFilePath, 'utf-8'));
+                if (rulesMap[bookSlug] && rulesMap[bookSlug].ruleset) {
+                    rulesetFolder = rulesMap[bookSlug].ruleset.includes('5.5') ? '5.5e' : '5e';
+                }
+            } catch (e) {
+                console.warn("Could not parse ruleset_map.json. Defaulting to '5e' folder.");
+            }
+        }
+        
+        const outputDir = path.resolve(__dirname, `../sources/${rulesetFolder}/atomic/${bookSlug}`);
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+        // -------------------------------------
 
         const manifest = new Map();
         manifest.set(TARGET_URL, "Front Matter & Table of Contents");
