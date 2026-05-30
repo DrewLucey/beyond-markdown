@@ -49,6 +49,16 @@ turndownService.addRule('headingIds', {
     }
 });
 
+// Rule: Clean Blockquote Formatting for Read-Aloud Text
+turndownService.addRule('blockquotes', {
+    filter: 'blockquote',
+    replacement: function (content) {
+        content = content.replace(/^\n+|\n+$/g, '');
+        content = content.replace(/^/gm, '> ');
+        return `\n\n${content}\n\n`;
+    }
+});
+
 async function runBulkPipeline() {
     const args = process.argv.slice(2);
     if (args.length === 0) {
@@ -94,7 +104,8 @@ async function runBulkPipeline() {
         
         try {
             const res = await axios.get(pageUrl, { headers: reqHeaders });
-            const $ = cheerio.load(res.data);
+            // FIX: Prevent silent lowercasing of HTML attributes
+            const $ = cheerio.load(res.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
             const items = [];
 
             // --- THE ANCHOR SCAVENGER ---
@@ -152,7 +163,8 @@ async function runBulkPipeline() {
                         continue;
                     }
 
-                    const $s = cheerio.load(itemRes.data);
+                    // FIX: Prevent silent lowercasing of HTML attributes on the target page
+                    const $s = cheerio.load(itemRes.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
                     let $content = null;
                     const selectors = ['.page-content', '.p-article-content', '.primary-content', 'main', 'article', '.container', '.details-container'];
                     
@@ -165,13 +177,9 @@ async function runBulkPipeline() {
                     }
 
                     if ($content && $content.length > 0) {
-                        // --- EXTRACT ID FOR TARGET ANCHOR ---
-                        const idMatch = item.url.match(/\/(\d+)-/);
-                        const entityId = idMatch ? idMatch[1] : '';
-
-                        // --- SOURCE & RULESET TAGGING ---
+                        // --- EXTRACT METADATA ---
                         let sourceText = "";
-                        const sourceEl = $content.find('.source, .spell-source, .monster-source, .magic-item-source, .equipment-source, .article-source').first();
+                        const sourceEl = $s('.source, .spell-source, .monster-source, .equipment-source, .magic-item-source').first();
                         if (sourceEl.length > 0) {
                             sourceText = sourceEl.text().replace(/\s+/g, ' ').trim();
                         }
@@ -180,72 +188,77 @@ async function runBulkPipeline() {
                         if (sourceText.includes('2024')) rulesetTag = '2024';
                         else if (sourceText.includes('2014')) rulesetTag = '2014';
                         
+                        // --- THE BADGE SANITIZER ---
+                        const legacyBadge = $s('.badge, #legacy-badge');
+                        let finalItemName = item.name.trim();
                         let isLegacyFlag = "false";
-
-                        // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
-                        const legacyBadge = $content.find('.badge, #legacy-badge');
-                        const mainHeader = $content.find('h1').first();
-
-                        if (mainHeader.length > 0) {
-                            // 1. Force the H1 to use our unique, scoped ID (e.g., id="Aasimar-1751434")
-                            const safeNameForAnchor = item.name.replace(/\s+\(Legacy\)/i, '').replace(/[^a-zA-Z0-9]/g, '');
-                            if (entityId && safeNameForAnchor) {
-                                mainHeader.attr('id', `${safeNameForAnchor}-${entityId}`);
-                            }
-                        }
 
                         if (legacyBadge.length > 0) {
                             isLegacyFlag = "true";
-                            if (rulesetTag === "5e") rulesetTag = "2014"; // Legacy badge heavily implies 2014 or older
-
-                            // 2. Destroy the tooltips and links from the DOM entirely
-                            $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
+                            $s('.badge-tooltip, .badge-text, .badge-cta').remove();
                             
-                            // 3. Extract just the raw text of the header
-                            let baseTitle = mainHeader.contents().filter(function() {
-                                return this.nodeType === 3; // Grabs strictly the text node
-                            }).text().replace(/\s+/g, ' ').trim();
-                            
-                            // 4. Rewrite the header cleanly
-                            if (baseTitle) {
-                                mainHeader.text(`${baseTitle} (Legacy)`);
+                            if (!finalItemName.toLowerCase().includes('(legacy)')) {
+                                finalItemName = `${finalItemName} (Legacy)`;
                             }
-                            
-                            // 5. Remove the badge container so Turndown doesn't read the word "Legacy" twice
                             legacyBadge.remove();
                         }
-                        // ---------------------------
+
+                        // Remove existing H1s and page titles so we don't duplicate them when we manually inject the URN header
+                        $content.find('h1, .page-title').remove();
                         
                         const category = categoryName.toUpperCase();
                         
+                        // --- DOUBLE-DOMAIN IMAGE FIX ---
+                        // Pre-process protocol-relative URLs (//www.dndbeyond.com...)
+                        $content.find('img, a').each((_, el) => {
+                            const attr = $s(el).is('img') ? 'src' : 'href';
+                            let val = $s(el).attr(attr);
+                            if (val && val.startsWith('//')) {
+                                $s(el).attr(attr, 'https:' + val);
+                            }
+                        });
+
                         // Pass through handler pipeline to scrub layout artifacts
                         const cleanHtml = processContent($s, $content, item.url, category);
                         
                         // Generate pure Markdown
                         let markdown = turndownService.turndown(cleanHtml);
                         
-                        // --- THE ASTERISK FIX ---
+                        // --- THE ESCAPE CHARACTER FIX ---
                         markdown = markdown.replace(/\\\*/g, '*'); 
-                        
-                        // --- THE ID PRESERVATION FIX ---
-                        // Extract the numerical ID from the URL (e.g. /species/12345-orc -> 12345)
+                        markdown = markdown.replace(/\\\[/g, '[');
+                        markdown = markdown.replace(/\\\]/g, ']');
+
+                        // --- FILE & SLUG PREPARATION ---
                         const idMatchForFile = item.url.match(/\/(\d+)-/);
                         const entityIdPrefix = idMatchForFile ? `${idMatchForFile[1]}-` : '';
-                        
                         const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
-                        // Prepend the ID to the filename to prevent overwrites (e.g. "12345-Orc.md")
                         const finalFileName = `${entityIdPrefix}${safeName}.md`;
-                        
-                        // --- NAMESPACE HEADING IDS ---
-                        // Converts {#actions} -> {#monsters:12345-orc:actions}
                         const itemSlug = finalFileName.replace('.md', '').toLowerCase();
-                        markdown = markdown.replace(/\{#([^}]+)\}/g, `{#${categoryName.toLowerCase()}:${itemSlug}:$1}`);
+
+                        // --- URN TITLE INJECTION ---
+                        // Automatically generate singular form for proper ref tags (e.g., 'feats' -> 'feat')
+                        const singularCategory = (categoryName.toLowerCase().endsWith('s') && categoryName.toLowerCase() !== 'species') 
+                            ? categoryName.toLowerCase().slice(0, -1) 
+                            : categoryName.toLowerCase();
+                            
+                        const urnHeader = `# ${finalItemName} {#ref:${singularCategory}:${itemSlug}}\n\n`;
+                        
+                        // Enforce the Title at the very top of the markdown payload
+                        markdown = urnHeader + markdown;
+
+                        // --- NAMESPACE HEADING IDS ---
+                        // Converts inner {#actions} -> {#category:itemslug:actions} (Preserving Casing)
+                        markdown = markdown.replace(/\{#([^}]+)\}/g, (match, p1) => {
+                            // Don't double-namespace the URN we just explicitly injected
+                            if (p1.startsWith('ref:')) return match;
+                            return `{#${categoryName.toLowerCase()}:${itemSlug}:${p1}}`;
+                        });
 
                         markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
 
                         // ENVELOPING FOR STITCHER:
-                        // Adds XML-style metadata tags so the Stitcher knows how to sort this
-                        const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}" source_book="${sourceText}">\n${markdown}\n</ENTRY>`;
+                        const wrappedMarkdown = `<ENTRY type="${category}" name="${finalItemName}" source_url="${item.url}" source_book="${sourceText}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}">\n${markdown}\n</ENTRY>`;
                         
                         fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
                     }

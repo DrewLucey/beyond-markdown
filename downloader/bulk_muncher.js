@@ -22,6 +22,42 @@ const config = require(configPath);
 const turndownService = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
 turndownService.use(gfm);
 
+// --- ADDED ENHANCEMENTS: Turndown Rules ---
+// FORCE DOUBLE-TILDE STRIKETHROUGH
+turndownService.addRule('strikethrough', {
+    filter: ['del', 's', 'strike'],
+    replacement: function (content) {
+        return '~~' + content + '~~';
+    }
+});
+
+// Rule: Capture Heading IDs (Sync with extract.js)
+turndownService.addRule('headingIds', {
+    filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+    replacement: function (content, node) {
+        const level = node.nodeName.charAt(1);
+        const prefix = '#'.repeat(level);
+        
+        // Reverted the forced lowercasing so Cheerio passes the exact original casing.
+        const id = node.getAttribute('id');
+        
+        const cleanContent = content.replace(/\[\]\(.*?\)/g, '').trim();
+        return id 
+            ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n` 
+            : `\n\n${prefix} ${cleanContent}\n\n`;
+    }
+});
+
+// Rule: Clean Blockquote Formatting for Read-Aloud Text
+turndownService.addRule('blockquotes', {
+    filter: 'blockquote',
+    replacement: function (content) {
+        content = content.replace(/^\n+|\n+$/g, '');
+        content = content.replace(/^/gm, '> ');
+        return `\n\n${content}\n\n`;
+    }
+});
+
 const TARGET_DIR = process.argv[2] || '/spells'; 
 const BASE_URL = 'https://www.dndbeyond.com';
 
@@ -30,7 +66,7 @@ const CATEGORY_MAP = {
     '/monsters': 'MONSTER',
     '/magic-items': 'MAGIC_ITEM',
     '/equipment': 'EQUIPMENT',
-    '/species': 'SPECIES' // Add this
+    '/species': 'SPECIES' 
 };
 
 async function runBulkMuncher() {
@@ -53,9 +89,10 @@ async function runBulkMuncher() {
         try {
             const listUrl = `${BASE_URL}${TARGET_DIR}?page=${currentPage}`;
             const response = await axios.get(listUrl, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
-            const $ = cheerio.load(response.data);
+            
+            // FIX: Prevent silent lowercasing of IDs
+            const $ = cheerio.load(response.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
 
-            // FIX: Support both legacy tables and the new React listing grids
             const links = $('.list-row, .info, .monster-name').find('a.link').length > 0 
                 ? $('.list-row, .info, .monster-name').find('a.link') 
                 : $('.listing-card__link');
@@ -94,7 +131,9 @@ async function runBulkMuncher() {
         
         try {
             const itemRes = await axios.get(item.url, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
-            const $s = cheerio.load(itemRes.data);
+            
+            // FIX: Prevent silent lowercasing of IDs
+            const $s = cheerio.load(itemRes.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
             
             let $content = null;
             const contentSelectors = ['.page-content', '.p-article-content', '.primary-content', 'main', 'article'];
@@ -108,10 +147,6 @@ async function runBulkMuncher() {
             }
 
             if ($content && $content.length > 0) {
-                // --- EXTRACT ID FOR TARGET ANCHOR ---
-                const idMatch = item.url.match(/\/(\d+)-/);
-                const entityId = idMatch ? idMatch[1] : '';
-
                 // --- SOURCE & RULESET TAGGING ---
                 let sourceText = "";
                 const sourceEl = $content.find('.source, .spell-source, .monster-source, .equipment-source, .magic-item-source').first();
@@ -123,56 +158,73 @@ async function runBulkMuncher() {
                 if (sourceText.includes('2024')) rulesetTag = '2024';
                 else if (sourceText.includes('2014')) rulesetTag = '2014';
                 
-                let isLegacyFlag = "false";
-
                 // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
+                let finalItemName = item.name.trim();
+                let isLegacyFlag = "false";
                 const legacyBadge = $content.find('.badge, #legacy-badge');
-                const mainHeader = $content.find('h1').first();
-
-                if (mainHeader.length > 0) {
-                    // 1. Force the H1 to use our unique, scoped ID (e.g., id="Aasimar-1751434")
-                    const safeNameForAnchor = item.name.replace(/\s+\(Legacy\)/i, '').replace(/[^a-zA-Z0-9]/g, '');
-                    if (entityId && safeNameForAnchor) {
-                        mainHeader.attr('id', `${safeNameForAnchor}-${entityId}`);
-                    }
-                }
 
                 if (legacyBadge.length > 0) {
                     isLegacyFlag = "true";
-                    if (rulesetTag === "5e") rulesetTag = "2014"; // Legacy badge implies older ruleset
-
-                    // 2. Destroy the tooltips and links from the DOM entirely
                     $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
                     
-                    // 3. Extract just the raw text of the header
-                    let baseTitle = mainHeader.contents().filter(function() { return this.nodeType === 3; }).text().replace(/\s+/g, ' ').trim();
-                    
-                    // 4. Rewrite the header cleanly
-                    if (baseTitle) mainHeader.text(`${baseTitle} (Legacy)`);
-                    
-                    // 5. Remove the badge container so Turndown doesn't read the word "Legacy" twice
+                    if (!finalItemName.toLowerCase().includes('(legacy)')) {
+                        finalItemName = `${finalItemName} (Legacy)`;
+                    }
                     legacyBadge.remove();
                 }
-                // ------------------------------
                 
+                // Remove existing H1s and page titles so we don't duplicate them
+                $content.find('h1, .page-title').remove();
+
+                // --- DOUBLE-DOMAIN IMAGE FIX ---
+                $content.find('img, a').each((_, el) => {
+                    const attr = $s(el).is('img') ? 'src' : 'href';
+                    let val = $s(el).attr(attr);
+                    if (val && val.startsWith('//')) {
+                        $s(el).attr(attr, 'https:' + val);
+                    }
+                });
+
                 const cleanHtml = processContent($s, $content, item.url, category);
                 
                 if (cleanHtml) {
                     let markdown = turndownService.turndown(cleanHtml);
                     
-                    // Un-escape Turndown's aggressive backslashes on normal asterisks
+                    // Un-escape Turndown's aggressive backslashes
                     markdown = markdown.replace(/\\\*/g, '*'); 
+                    markdown = markdown.replace(/\\\[/g, '[');
+                    markdown = markdown.replace(/\\\]/g, ']');
                     
-                    markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
-
-                    // Include the new source ruleset metadata in the XML
-                    const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" source_book="${sourceText}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}">\n${markdown}\n</ENTRY>`;
-                    
-                    // --- THE ID PRESERVATION FIX ---
+                    // --- FILE & SLUG PREPARATION ---
                     const idMatchForFile = item.url.match(/\/(\d+)-/);
                     const entityIdPrefix = idMatchForFile ? `${idMatchForFile[1]}-` : '';
                     const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
                     const finalFileName = `${entityIdPrefix}${safeName}.md`;
+                    
+                    // NEW FIX: Extract exact slug directly from URL to guarantee perfect hyphenation
+                    const itemSlug = item.url.split('/').pop().split('?')[0].toLowerCase();
+
+                    // Strip leading whitespace before adding our header
+                    markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
+
+                    // --- URN TITLE INJECTION ---
+                    const cleanCategory = folderName.toLowerCase();
+                    const singularCategory = (cleanCategory.endsWith('s') && cleanCategory !== 'species') 
+                        ? cleanCategory.slice(0, -1) 
+                        : cleanCategory;
+                        
+                    const urnHeader = `# ${finalItemName} {#ref:${singularCategory}:${itemSlug}}\n\n`;
+                    markdown = urnHeader + markdown;
+
+                    // --- NAMESPACE HEADING IDS ---
+                    markdown = markdown.replace(/\{#([^}]+)\}/g, (match, p1) => {
+                        // Don't double-namespace the URN we just injected
+                        if (p1.startsWith('ref:')) return match;
+                        return `{#${cleanCategory}:${itemSlug}:${p1}}`;
+                    });
+
+                    // Add a double newline after the ENTRY tag for readability
+                    const wrappedMarkdown = `<ENTRY type="${category}" name="${finalItemName}" source_url="${item.url}" source_book="${sourceText}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}">\n\n${markdown}\n</ENTRY>`;
                     
                     fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
                     successCount++;

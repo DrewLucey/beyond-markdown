@@ -1,7 +1,7 @@
 /**
  * stitcher.js
  * Assembles atomic Markdown files into a macro-level sourcebook based on the index.
- * Final: Hierarchy Rulesets, Google Drive Sync, & Namespaced AI Anchors
+ * Final: AI Context Namespaces, DDB Tooltip References, & Self-Healing Anchor Casing
  */
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
@@ -32,7 +32,6 @@ if (fs.existsSync(mapFilePath)) {
         if (rulesMap[TARGET_BOOK.toLowerCase()]) {
             bookMeta = rulesMap[TARGET_BOOK.toLowerCase()];
             if (bookMeta.title) {
-                // Strip illegal characters from the title for safe file saving
                 bookTitle = bookMeta.title.replace(/[<>:"/\\|?*]+/g, '').trim(); 
             }
         }
@@ -43,8 +42,12 @@ if (fs.existsSync(mapFilePath)) {
     console.warn("ruleset_map.json not found. Run `node downloader/library.js` for better AI metadata and naming.");
 }
 
+// --- DIRECTORY HIERARCHY LOGIC ---
+const rulesetFolder = bookMeta.ruleset.includes('5.5') ? '5.5e' : '5e';
+const sourceDir = path.resolve(__dirname, `../sources/${rulesetFolder}/atomic/${TARGET_BOOK}`);
+
 const finalFileName = `${bookTitle} (${bookMeta.ruleset}).md`;
-const outputFile = path.resolve(__dirname, `../sources/${TARGET_BOOK}/${finalFileName}`);
+const outputFile = path.resolve(__dirname, `../sources/${rulesetFolder}/${finalFileName}`);
 // ---------------------------------------------------------
 
 function buildStitcherManifest(dirPath) {
@@ -58,20 +61,15 @@ function buildStitcherManifest(dirPath) {
         throw new Error(`Critical Error: index.md not found in ${dirPath}. The stitcher relies on the index to determine reading order.`);
     }
 
-    // Capture every actual .md file, deliberately ignoring the master outputs so we don't stitch the master into the master
     const availableFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.md') && !f.startsWith('_master__'));
-    
     console.log(`Found ${availableFiles.length} atomic files. Mapping reading order from index.md...`);
 
     const indexContent = fs.readFileSync(indexFilePath, 'utf-8');
     const htmlContent = marked.parse(indexContent);
-    
-    // --> THIS IS THE VITAL LINE THAT WENT MISSING LOCALLY <--
     const $ = cheerio.load(htmlContent);
 
     const chapterSlugs = ['index.md'];
 
-    // Locate chapter links inside the Table of Contents
     $('a').each((_, el) => {
         let href = $(el).attr('href');
         if (!href) return;
@@ -80,7 +78,6 @@ function buildStitcherManifest(dirPath) {
         const pathParts = cleanSlug.split('/');
         let targetSlug = pathParts[pathParts.length - 1]; 
         
-        // Ensure root book URLs map to the index.md file
         if (targetSlug.toLowerCase() === TARGET_BOOK.toLowerCase()) {
             targetSlug = 'index';
         }
@@ -95,21 +92,15 @@ function buildStitcherManifest(dirPath) {
     });
 
     const manifest = [];
-    
     for (const filename of chapterSlugs) {
         const filePath = path.join(dirPath, filename);
         if (fs.existsSync(filePath)) {
             const rawTitle = filename.replace('.md', '').replace(/-/g, ' ');
             const title = rawTitle.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-            
-            manifest.push({
-                slug: filename,
-                title: title
-            });
+            manifest.push({ slug: filename, title: title });
         }
     }
 
-    // Catch-All: Append any files that downloaded but weren't linked in the index.md
     availableFiles.forEach(file => {
         if (!chapterSlugs.includes(file)) {
             console.log(`[Info] Automatically appending unlinked file: ${file}`);
@@ -122,27 +113,63 @@ function buildStitcherManifest(dirPath) {
     return manifest;
 }
 
+// --- SELF-HEALING DICTIONARY ---
+// Scans the actual text of Markdown headings to dynamically construct the true CamelCase hash
+function buildHashDictionary(manifest, srcDir) {
+    const dict = {};
+    for (const { slug } of manifest) {
+        const filePath = path.join(srcDir, slug);
+        if (!fs.existsSync(filePath)) continue;
+        
+        const chapterText = fs.readFileSync(filePath, 'utf-8');
+        
+        // Matches headings like: ## Some Heading Text {#namespace:slug:hash} or {#hash}
+        const headingRegex = /^(#+)\s+(.*?)\s+\{#(?:[^:]+:[^:]+:)?([^}]+)\}/gm;
+        let match;
+        
+        while ((match = headingRegex.exec(chapterText)) !== null) {
+            const rawHeadingText = match[2]; 
+            const rawHash = match[3]; 
+            
+            // Clean markdown artifacts (e.g., **Title**, [Title](url))
+            const cleanText = rawHeadingText.replace(/[*_~`\[\]()]/g, '').trim();
+            
+            // Generate exact DDB CamelCase hash by stripping non-alphanumeric chars
+            const camelCaseHash = cleanText.replace(/[^a-zA-Z0-9]/g, '');
+            
+            if (camelCaseHash && rawHash) {
+                dict[rawHash.toLowerCase()] = camelCaseHash;
+            }
+        }
+    }
+    return dict;
+}
+
 /**
  * Parses and transforms relative Markdown links pointing to other chapter files.
+ * Uses the hashDictionary to guarantee URL casing perfectly matches the source material.
  */
-function transformMarkdownLinks(content, manifest, currentSlug, bookSlug) {
+function transformMarkdownLinks(content, manifest, currentSlug, bookSlug, bookPath, hashDictionary) {
     const validChapterIds = new Set(manifest.map(m => m.slug.replace('.md', '')));
+    const baseUrl = `https://www.dndbeyond.com${bookPath || `/sources/dnd/${bookSlug}`}`;
 
     return content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, rawUrlGroup) => {
         let url = rawUrlGroup;
-        let titleAttr = "";
         
-        // Safely extract the URN tooltip title if one exists
         const spaceIndex = rawUrlGroup.indexOf(' ');
         if (spaceIndex !== -1 && rawUrlGroup.endsWith('"')) { 
             url = rawUrlGroup.substring(0, spaceIndex);
-            titleAttr = rawUrlGroup.substring(spaceIndex).trim();
         }
 
         // Handle same-page jump links
         if (url.startsWith('#')) {
-            const finalUrl = `#${bookSlug}:${currentSlug}:${url.substring(1).toLowerCase()}`;
-            return titleAttr ? `[${text}](${finalUrl} ${titleAttr})` : `[${text}](${finalUrl})`;
+            const cleanHash = url.substring(1);
+            // Self-Heal: Swap the broken lowercase hash for the true CamelCase hash
+            const trueHash = hashDictionary[cleanHash.toLowerCase()] || cleanHash;
+            
+            const finalHash = `#${bookSlug}:${currentSlug}:${trueHash}`;
+            const originalUrl = `${baseUrl}/${currentSlug}#${trueHash}`;
+            return `[${text}](${finalHash} "${originalUrl}")`;
         }
 
         let targetSlug = "";
@@ -170,19 +197,19 @@ function transformMarkdownLinks(content, manifest, currentSlug, bookSlug) {
         }
 
         if (targetSlug && validChapterIds.has(targetSlug)) {
-            // Apply the new Namespace logic
-            let finalUrl = "";
+            let trueHash = "";
             if (hash) {
-                finalUrl = `#${bookSlug}:${targetSlug}:${hash.substring(1).toLowerCase()}`;
-            } else {
-                finalUrl = `#${bookSlug}:${targetSlug}`;
+                const cleanHash = hash.substring(1);
+                // Self-Heal: Swap the broken lowercase hash for the true CamelCase hash
+                trueHash = hashDictionary[cleanHash.toLowerCase()] || cleanHash;
             }
 
-            if (titleAttr) {
-                return `[${text}](${finalUrl} ${titleAttr})`;
-            } else {
-                return `[${text}](${finalUrl})`;
-            }
+            const finalHash = trueHash ? `#${bookSlug}:${targetSlug}:${trueHash}` : `#${bookSlug}:${targetSlug}`;
+            
+            const urlTargetSlug = targetSlug === 'index' ? '' : `/${targetSlug}`;
+            const originalUrl = trueHash ? `${baseUrl}${urlTargetSlug}#${trueHash}` : `${baseUrl}${urlTargetSlug}`;
+
+            return `[${text}](${finalHash} "${originalUrl}")`;
         }
 
         return match;
@@ -194,15 +221,17 @@ async function runStitcher() {
         const outputFolder = path.dirname(outputFile);
         if (!fs.existsSync(outputFolder)) fs.mkdirSync(outputFolder, { recursive: true });
 
-        // Unattended Execution: Silently overwrite if exists
         if (fs.existsSync(outputFile)) {
             console.log(`\nℹ️ Overwriting existing master file: ${finalFileName}`);
         }
 
         const manifest = buildStitcherManifest(sourceDir);
-        console.log(`Manifest built: ${manifest.length} chapters loaded.\n`);
+        console.log(`Manifest built: ${manifest.length} chapters loaded.`);
 
-        // Namespaced XML Wrapper
+        // NEW: Build the true-casing dictionary from actual Markdown headings
+        const hashDictionary = buildHashDictionary(manifest, sourceDir);
+        console.log(`Anchor dictionary mapped: Casing secured.\n`);
+
         let masterContent = `<SOURCEBOOK id="${TARGET_BOOK.toUpperCase()}" ruleset="${bookMeta.ruleset}" type="${bookMeta.type}" legacy="${bookMeta.isLegacy}">\n\n`;
 
         for (let i = 0; i < manifest.length; i++) {
@@ -214,9 +243,15 @@ async function runStitcher() {
             let chapterText = fs.readFileSync(filePath, 'utf-8');
             const chapterSlug = slug.replace('.md', '');
             
-            chapterText = transformMarkdownLinks(chapterText, manifest, chapterSlug, TARGET_BOOK);
+            // NEW: Self-Heal the anchor definitions embedded in the target chapter's body text
+            chapterText = chapterText.replace(/\{#([^:]+):([^:]+):([^}]+)\}/g, (match, p1, p2, p3) => {
+                const trueHash = hashDictionary[p3.toLowerCase()] || p3;
+                return `{#${p1}:${p2}:${trueHash}}`;
+            });
             
-            // Namespaced Chapter Wrapper
+            // Pass the hashDictionary so transformMarkdownLinks can self-heal the TOC
+            chapterText = transformMarkdownLinks(chapterText, manifest, chapterSlug, TARGET_BOOK, bookMeta.path, hashDictionary);
+            
             masterContent += `<CHAPTER id="${TARGET_BOOK}:${chapterSlug}" title="${title}">\n\n`;
             masterContent += chapterText;
             masterContent += `\n\n</CHAPTER>\n\n`;

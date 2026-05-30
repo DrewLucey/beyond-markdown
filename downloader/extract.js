@@ -47,7 +47,10 @@ turndownService.addRule('headingIds', {
     replacement: function (content, node) {
         const level = node.nodeName.charAt(1);
         const prefix = '#'.repeat(level);
+        
+        // FIX: Reverted the forced lowercasing. Cheerio will now pass the exact original casing.
         const id = node.getAttribute('id');
+        
         const cleanContent = content.replace(/\[\]\(.*?\)/g, '').trim();
         return id 
             ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n` 
@@ -65,12 +68,46 @@ turndownService.addRule('blockquotes', {
     }
 });
 
-const DEFAULT_URL = 'https://www.dndbeyond.com/sources/dnd/phb-2014';
-const TARGET_URL = process.argv[2] || DEFAULT_URL;
+const INPUT_ARG = process.argv[2] || 'https://www.dndbeyond.com/sources/dnd/phb-2014';
 
 async function runPipeline() {
     try {
         console.log(`--- Starting Adventure Extraction Pipeline ---`);
+        
+        // --- INPUT RESOLUTION (URL vs SLUG) ---
+        let TARGET_URL = INPUT_ARG;
+        let bookSlug = '';
+        let rulesetFolder = "5e";
+
+        const mapFilePath = path.resolve(__dirname, '../sources/ruleset_map.json');
+        let rulesMap = {};
+        
+        if (fs.existsSync(mapFilePath)) {
+            try {
+                rulesMap = JSON.parse(fs.readFileSync(mapFilePath, 'utf-8'));
+            } catch (e) {
+                console.warn("Could not parse ruleset_map.json.");
+            }
+        }
+
+        if (INPUT_ARG.startsWith('http')) {
+            TARGET_URL = INPUT_ARG.replace(/\/$/, "");
+            bookSlug = TARGET_URL.split('/').pop();
+        } else {
+            bookSlug = INPUT_ARG;
+            // Intelligently construct the URL using the library map if available
+            if (rulesMap[bookSlug] && rulesMap[bookSlug].path) {
+                TARGET_URL = `https://www.dndbeyond.com${rulesMap[bookSlug].path}`;
+            } else {
+                TARGET_URL = `https://www.dndbeyond.com/sources/dnd/${bookSlug}`;
+            }
+        }
+
+        // Determine 5e vs 5.5e Directory Hierarchy
+        if (rulesMap[bookSlug] && rulesMap[bookSlug].ruleset) {
+            rulesetFolder = rulesMap[bookSlug].ruleset.includes('5.5') ? '5.5e' : '5e';
+        }
+        
         console.log(`Targeting: ${TARGET_URL}`);
         
         // 1. Grab the root page first to define our scope
@@ -78,23 +115,8 @@ async function runPipeline() {
             headers: { 'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '' }
         });
 
-        const $ = cheerio.load(response.data);
-        const urlParts = TARGET_URL.replace(/\/$/, "").split('/');
-        const bookSlug = urlParts.pop();
-        
-        // 2. Determine 5e vs 5.5e Directory Hierarchy
-        let rulesetFolder = "5e";
-        const mapFilePath = path.resolve(__dirname, '../sources/ruleset_map.json');
-        if (fs.existsSync(mapFilePath)) {
-            try {
-                const rulesMap = JSON.parse(fs.readFileSync(mapFilePath, 'utf-8'));
-                if (rulesMap[bookSlug] && rulesMap[bookSlug].ruleset) {
-                    rulesetFolder = rulesMap[bookSlug].ruleset.includes('5.5') ? '5.5e' : '5e';
-                }
-            } catch (e) {
-                console.warn("Could not parse ruleset_map.json. Defaulting to '5e' folder.");
-            }
-        }
+        // FIX: Force Cheerio to stop silently lowercasing HTML attributes!
+        const $ = cheerio.load(response.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
         
         const outputDir = path.resolve(__dirname, `../sources/${rulesetFolder}/atomic/${bookSlug}`);
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
@@ -145,7 +167,8 @@ async function runPipeline() {
                     continue; 
                 }
 
-                const $s = cheerio.load(chapterRes.data);
+                // FIX: Apply the same strict casing rules to the child chapters
+                const $s = cheerio.load(chapterRes.data, { lowerCaseTags: false,lowerCaseAttributeNames: false });
                 
                 // Prioritize outer wrapper content
                 const contentSelectors = [
@@ -186,8 +209,8 @@ async function runPipeline() {
                     markdown = markdown.replace(/\\\]/g, ']');
                     
                     // --- NAMESPACE HEADING IDS ---
-                    // Converts {#whatdwellshere} -> {#wdotmm:dungeon-level:whatdwellshere}
-                    markdown = markdown.replace(/\{#([^}]+)\}/g, `{#${bookSlug}:${fileSlug}:$1}`);
+                    // Converts {#WhatDwellsHere} -> {#wdotmm:dungeon-level:WhatDwellsHere} (Preserving Casing)
+                    markdown = markdown.replace(/\{#([^}]+)\}/g, (match, p1) => `{#${bookSlug}:${fileSlug}:${p1}}`);
 
                     markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
                     fs.writeFileSync(filePath, markdown);
