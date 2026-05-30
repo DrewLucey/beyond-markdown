@@ -87,6 +87,21 @@ async function crawlLibrary() {
         const response = await axios.get(LIBRARY_URL, { headers: reqHeaders });
 
         const $ = cheerio.load(response.data);
+        
+        // --- VISIBLE SOURCE CARDS (SOURCE OF TRUTH FOR OWNERSHIP) ---
+        // Because the Next.js JSON array contains the *entire* DDB catalog, we must scrape
+        // the visually rendered cards to determine what is actually owned/shared.
+        const visibleOwnedSlugs = new Set();
+        $('[data-testid="sourceCard"]').each((_, el) => {
+            const $link = $(el).find('a[class*="sourceTitle"]');
+            const relativePath = $link.attr('href');
+            if (relativePath) {
+                visibleOwnedSlugs.add(relativePath.split('/').pop());
+            }
+        });
+        
+        console.log(`Found ${visibleOwnedSlugs.size} verified owned/shared source cards in the DOM.`);
+
         const sourceMap = {};
         let sources = [];
 
@@ -143,6 +158,8 @@ async function crawlLibrary() {
                         }
                     }
                     
+                    const isCardVisible = visibleOwnedSlugs.has(slug);
+                    
                     // Map the exact schema values required for AI routing + comprehensive repo data
                     sourceMap[slug] = {
                         id: source.id || null,
@@ -162,7 +179,8 @@ async function crawlLibrary() {
                         isFree: source.isFree === true,
                         isReleased: source.isReleased !== false,
                         releaseDate: source.releaseDate || null,
-                        isOwned: source.isOwned === true,
+                        // OVERRIDE: Cross-reference with the DOM to establish true ownership
+                        isOwned: isCardVisible || source.isOwned === true,
                         isSharedWithMe: source.isSharedWithMe === true,
                         isFavorite: source.isFavorite === true,
                         isOnWishlist: source.isOnWishlist === true,
