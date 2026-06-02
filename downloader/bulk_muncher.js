@@ -19,6 +19,16 @@ const __dirname = path.dirname(__filename);
 const configPath = path.resolve(__dirname, '../config.cjs');
 const config = require(configPath);
 
+const mapFilePath = path.resolve(__dirname, '../sources/ruleset_map.json');
+let rulesMap = {};
+if (fs.existsSync(mapFilePath)) {
+    try {
+        rulesMap = JSON.parse(fs.readFileSync(mapFilePath, 'utf-8'));
+    } catch (e) {
+        console.warn("Could not parse ruleset_map.json.");
+    }
+}
+
 const turndownService = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
 turndownService.use(gfm);
 
@@ -66,7 +76,8 @@ const CATEGORY_MAP = {
     '/monsters': 'MONSTER',
     '/magic-items': 'MAGIC_ITEM',
     '/equipment': 'EQUIPMENT',
-    '/species': 'SPECIES' 
+    '/species': 'SPECIES',
+    '/classes': 'CLASS'
 };
 
 async function runBulkMuncher() {
@@ -87,12 +98,13 @@ async function runBulkMuncher() {
     while (hasNext) {
         process.stdout.write(`\rScouting Page ${currentPage}...`);
         try {
-            const listUrl = `${BASE_URL}${TARGET_DIR}?page=${currentPage}`;
+            const listUrl = `${BASE_URL}${TARGET_DIR}?filter-partnered-content=t&page=${currentPage}`;
             const response = await axios.get(listUrl, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
             
             // FIX: Prevent silent lowercasing of IDs
             const $ = cheerio.load(response.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
 
+            // FIX: Support both legacy tables and the new React listing grids
             const links = $('.list-row, .info, .monster-name').find('a.link').length > 0 
                 ? $('.list-row, .info, .monster-name').find('a.link') 
                 : $('.listing-card__link');
@@ -106,9 +118,19 @@ async function runBulkMuncher() {
                 const relativeUrl = href.replace('https://www.dndbeyond.com', '');
                 const name = $(el).find('.listing-card__title').text().trim() || $(el).text().trim();
                 
+                // NEW FIX: Scrape sourcebook from listing page if available (e.g. for /classes)
+                let listSource = "";
+                const dataSearch = $(el).closest('[data-collapsible-search]').attr('data-collapsible-search');
+                if (dataSearch && dataSearch.includes('|')) {
+                    listSource = dataSearch.split('|')[1].trim();
+                } else {
+                    const sourceDiv = $(el).find('.listing-card__source').text().trim();
+                    if (sourceDiv) listSource = sourceDiv;
+                }
+                
                 if (relativeUrl.startsWith(TARGET_DIR + '/')) {
                     const fullUrl = href.startsWith('http') ? href : BASE_URL + href;
-                    itemQueue.push({ name, url: fullUrl });
+                    itemQueue.push({ name, url: fullUrl, listSource });
                 }
             });
 
@@ -129,9 +151,22 @@ async function runBulkMuncher() {
     for (let i = 0; i < itemQueue.length; i++) {
         const item = itemQueue[i];
         
+        // Fast-fail if the URL is blatantly a marketplace link
+        if (item.url.includes('/marketplace/') || item.url.includes('marketplace.dndbeyond.com')) {
+            console.warn(`\n  > Skipped (Unowned): ${item.name}`);
+            continue;
+        }
+
         try {
             const itemRes = await axios.get(item.url, { headers: { 'Cookie': `CobaltSession=${config.cobaltSession}` } });
             
+            // Check if DDB secretly redirected us to the marketplace due to lack of ownership
+            const finalUrl = itemRes.request?.res?.responseUrl || item.url;
+            if (finalUrl.includes('marketplace.dndbeyond.com') || finalUrl.includes('/marketplace/')) {
+                console.warn(`\n  > Skipped (Unowned Redirect): ${item.name}`);
+                continue;
+            }
+
             // FIX: Prevent silent lowercasing of IDs
             const $s = cheerio.load(itemRes.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
             
@@ -148,16 +183,37 @@ async function runBulkMuncher() {
 
             if ($content && $content.length > 0) {
                 // --- SOURCE & RULESET TAGGING ---
-                let sourceText = "";
-                const sourceEl = $content.find('.source, .spell-source, .monster-source, .equipment-source, .magic-item-source').first();
+                let sourceText = item.listSource || "";
+                // ADDED .source-summary to support the new species/backgrounds pages
+                const sourceEl = $content.find('.source, .spell-source, .monster-source, .equipment-source, .magic-item-source, .source-description, .source-summary').first();
                 if (sourceEl.length > 0) {
-                    sourceText = sourceEl.text().replace(/\s+/g, ' ').trim();
+                    const extractedSource = sourceEl.text().replace(/\s+/g, ' ').trim();
+                    if (extractedSource) {
+                        sourceText = extractedSource;
+                    }
                 }
 
                 let rulesetTag = "5e";
-                if (sourceText.includes('2024')) rulesetTag = '2024';
-                else if (sourceText.includes('2014')) rulesetTag = '2014';
+                let foundInMap = false;
+
+                if (sourceText) {
+                    // Strips off ", pg. X" for exact title matching
+                    const cleanSourceTitle = sourceText.split(',')[0].trim();
+                    for (const key in rulesMap) {
+                        if (rulesMap[key].title === cleanSourceTitle) {
+                            rulesetTag = rulesMap[key].ruleset || rulesetTag;
+                            foundInMap = true;
+                            break;
+                        }
+                    }
+                }
                 
+                // Fallback for SRD items or things missing from the map
+                if (!foundInMap) {
+                    if (sourceText.includes('2024')) rulesetTag = '2024';
+                    else if (sourceText.includes('2014')) rulesetTag = '2014';
+                }
+
                 // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
                 let finalItemName = item.name.trim();
                 let isLegacyFlag = "false";
@@ -165,11 +221,13 @@ async function runBulkMuncher() {
 
                 if (legacyBadge.length > 0) {
                     isLegacyFlag = "true";
+                    // Destroy the tooltips and links from the DOM entirely
                     $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
                     
                     if (!finalItemName.toLowerCase().includes('(legacy)')) {
                         finalItemName = `${finalItemName} (Legacy)`;
                     }
+                    // Remove the badge container so Turndown doesn't read the word "Legacy" twice
                     legacyBadge.remove();
                 }
                 
@@ -190,7 +248,7 @@ async function runBulkMuncher() {
                 if (cleanHtml) {
                     let markdown = turndownService.turndown(cleanHtml);
                     
-                    // Un-escape Turndown's aggressive backslashes
+                    // Un-escape Turndown's aggressive backslashes on normal asterisks and brackets
                     markdown = markdown.replace(/\\\*/g, '*'); 
                     markdown = markdown.replace(/\\\[/g, '[');
                     markdown = markdown.replace(/\\\]/g, ']');

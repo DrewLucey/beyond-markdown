@@ -125,6 +125,9 @@ async function runPipeline() {
         manifest.set(TARGET_URL, "Front Matter & Table of Contents");
 
         // 3. Intelligent TOC Harvester (CSS-Free)
+        // Generate a relaxed slug for legacy books (e.g. dmg-2014 -> dmg) to match internal links
+        const relaxedSlug = bookSlug.replace(/-2014|-2024$/, '');
+
         $('a').each((i, el) => {
             let href = $(el).attr('href');
             if (!href) return;
@@ -133,9 +136,10 @@ async function runPipeline() {
                 const abs = new URL(href, 'https://www.dndbeyond.com');
                 const cleanUrl = abs.origin + abs.pathname;
                 const cleanPath = abs.pathname.replace(/\/$/, "");
+                const searchPath = cleanPath + "/";
 
-                // Validates URL by verifying it explicitly sits inside the book's root slug directory
-                if (cleanPath.includes(`/${bookSlug}/`)) {
+                // Validates URL by verifying it explicitly sits inside the book's root slug directory OR its legacy relaxed variant
+                if (searchPath.includes(`/${bookSlug}/`) || searchPath.includes(`/${relaxedSlug}/`)) {
                     if (!manifest.has(cleanUrl)) manifest.set(cleanUrl, $(el).text().trim());
                 }
             } catch (e) {

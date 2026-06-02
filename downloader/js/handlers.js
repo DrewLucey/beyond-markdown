@@ -3,6 +3,8 @@
  * Handles DOM surgery to ensure technical fidelity before Markdown conversion.
  * Updated: Preserved Absolute URLs with Semantic URN Title Attributes
  */
+import * as prettier from 'prettier';
+
 export function processContent($, $content, sectionUrl, category = 'GENERAL') {
     // 1. NOISE SANITIZATION
     $content.find('style, script, aside.secondary-content, .p-article-byline, .p-article-header, .p-article-header-mobile, .p-article-header-full, .p-article-header-desktop, #comments, .comments, .b-comments').remove();
@@ -542,4 +544,18 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
 
     $('a:empty').remove();
     return $content.html();
+}
+
+/**
+ * Formats the final Markdown payload using Prettier to ensure strict 
+ * list indentation, table spacing, and blank line normalizations.
+ */
+export async function formatMarkdown(markdown) {
+    return await prettier.format(markdown, {
+        parser: 'markdown',
+        proseWrap: 'preserve', 
+        printWidth: 120,
+        tabWidth: 4,           
+        htmlWhitespaceSensitivity: 'ignore' 
+    });
 }

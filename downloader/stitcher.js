@@ -234,6 +234,8 @@ async function runStitcher() {
 
         let masterContent = `<SOURCEBOOK id="${TARGET_BOOK.toUpperCase()}" ruleset="${bookMeta.ruleset}" type="${bookMeta.type}" legacy="${bookMeta.isLegacy}">\n\n`;
 
+        masterContent += `# ${bookTitle} {#${TARGET_BOOK.toLowerCase()}}\n\n`;
+
         for (let i = 0; i < manifest.length; i++) {
             const { slug, title } = manifest[i];
             const filePath = path.join(sourceDir, slug);
