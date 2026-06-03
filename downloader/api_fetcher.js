@@ -54,6 +54,7 @@ async function getAuthToken() {
 
 const ENDPOINTS = {
     classes: 'https://character-service.dndbeyond.com/character/v5/game-data/classes',
+    // subclasses: 'https://character-service.dndbeyond.com/character/v5/game-data/subclasses?baseClassId=2656866',
     spells: 'https://character-service.dndbeyond.com/character/v5/game-data/spells',
     items: 'https://character-service.dndbeyond.com/character/v5.1/game-data/items',
     feats: 'https://character-service.dndbeyond.com/character/v5/game-data/feats',

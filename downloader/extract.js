@@ -9,7 +9,7 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm'; 
-import { processContent } from './js/handlers.js';
+import { processContent, formatMarkdown } from './js/handlers.js';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -95,25 +95,60 @@ async function runPipeline() {
             bookSlug = TARGET_URL.split('/').pop();
         } else {
             bookSlug = INPUT_ARG;
+
+            // Fallback 1: Strip -2014 and check map again
+            if (!rulesMap[bookSlug] && bookSlug.endsWith('-2014')) {
+                const stripped = bookSlug.replace('-2014', '');
+                if (rulesMap[stripped]) {
+                    console.log(`[Info] Redirecting mapped slug: ${bookSlug} -> ${stripped}`);
+                    bookSlug = stripped;
+                }
+            }
+
             // Intelligently construct the URL using the library map if available
             if (rulesMap[bookSlug] && rulesMap[bookSlug].path) {
                 TARGET_URL = `https://www.dndbeyond.com${rulesMap[bookSlug].path}`;
+                // Set book slug to whatever the actual path uses so TOC scraping matches perfectly
+                bookSlug = TARGET_URL.split('/').filter(Boolean).pop();
             } else {
                 TARGET_URL = `https://www.dndbeyond.com/sources/dnd/${bookSlug}`;
             }
         }
 
         // Determine 5e vs 5.5e Directory Hierarchy
-        if (rulesMap[bookSlug] && rulesMap[bookSlug].ruleset) {
-            rulesetFolder = rulesMap[bookSlug].ruleset.includes('5.5') ? '5.5e' : '5e';
+        let mapLookup = Object.values(rulesMap).find(m => m.path && m.path.endsWith(`/${bookSlug}`)) || rulesMap[bookSlug];
+        if (mapLookup && mapLookup.ruleset) {
+            rulesetFolder = mapLookup.ruleset.includes('5.5') || mapLookup.ruleset.includes('2024') ? '5.5e' : '5e';
         }
         
         console.log(`Targeting: ${TARGET_URL}`);
         
         // 1. Grab the root page first to define our scope
-        const response = await axios.get(TARGET_URL, {
-            headers: { 'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '' }
-        });
+        let response;
+        try {
+            response = await axios.get(TARGET_URL, {
+                headers: { 'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '' }
+            });
+        } catch (err) {
+            // Fallback 2: If the network request 404s, try dynamically stripping -2014
+            if (err.response && err.response.status === 404 && bookSlug.endsWith('-2014')) {
+                console.log(`[Info] 404 Not Found. Retrying legacy path without -2014 suffix...`);
+                bookSlug = bookSlug.replace('-2014', '');
+                TARGET_URL = `https://www.dndbeyond.com/sources/dnd/${bookSlug}`;
+                
+                // Re-check directory routing
+                mapLookup = rulesMap[bookSlug];
+                if (mapLookup && mapLookup.ruleset) {
+                    rulesetFolder = mapLookup.ruleset.includes('5.5') || mapLookup.ruleset.includes('2024') ? '5.5e' : '5e';
+                }
+
+                response = await axios.get(TARGET_URL, {
+                    headers: { 'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '' }
+                });
+            } else {
+                throw err;
+            }
+        }
 
         // FIX: Force Cheerio to stop silently lowercasing HTML attributes!
         const $ = cheerio.load(response.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
@@ -172,7 +207,7 @@ async function runPipeline() {
                 }
 
                 // FIX: Apply the same strict casing rules to the child chapters
-                const $s = cheerio.load(chapterRes.data, { lowerCaseTags: false,lowerCaseAttributeNames: false });
+                const $s = cheerio.load(chapterRes.data, { lowerCaseTags: false, lowerCaseAttributeNames: false });
                 
                 // Prioritize outer wrapper content
                 const contentSelectors = [
@@ -217,6 +252,10 @@ async function runPipeline() {
                     markdown = markdown.replace(/\{#([^}]+)\}/g, (match, p1) => `{#${bookSlug}:${fileSlug}:${p1}}`);
 
                     markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
+                    
+                    // --- PRETTIER FORMATTING PASS ---
+                    markdown = await formatMarkdown(markdown);
+
                     fs.writeFileSync(filePath, markdown);
                 }
             } catch (err) {
