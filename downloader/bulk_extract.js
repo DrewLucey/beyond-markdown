@@ -143,7 +143,7 @@ async function runBulkPipeline() {
                 
                 if (relativeUrl.startsWith(categoryBase) && relativeUrl.length > categoryBase.length) {
                     // Ignore pagination, comments, and explicit marketplace links
-                    if (relativeUrl.includes('?') || relativeUrl.includes('#') || relativeUrl.includes('/marketplace/')) return;
+                    if (relativeUrl.includes('?') || relativeUrl.includes('#') || relativeUrl.includes('/marketplace/') || url.includes('marketplace.dndbeyond.com')) return;
                     
                     let name = $(el).find('.listing-card__title').text().trim() || $(el).text().replace(/\s+/g, ' ').trim();
                     if (!name || name.length < 2) return; 
@@ -191,7 +191,8 @@ async function runBulkPipeline() {
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
         
-        if (item.url.includes('/marketplace/')) {
+        // Fast-fail if the URL is blatantly a marketplace link
+        if (item.url.includes('marketplace.dndbeyond.com') || item.url.includes('/marketplace/')) {
             console.warn(`\n  > Skipped (Unowned): ${item.name}`);
             continue;
         }
@@ -199,7 +200,9 @@ async function runBulkPipeline() {
         try {
             const itemRes = await axios.get(item.url, { headers: reqHeaders });
 
-            if (itemRes.request.res.responseUrl.includes('/marketplace/')) {
+            // Check if DDB secretly redirected us to the marketplace due to lack of ownership
+            const finalUrl = itemRes.request?.res?.responseUrl || item.url;
+            if (finalUrl.includes('marketplace.dndbeyond.com') || finalUrl.includes('/marketplace/')) {
                 console.warn(`\n  > Skipped (Unowned Redirect): ${item.name}`);
                 continue;
             }

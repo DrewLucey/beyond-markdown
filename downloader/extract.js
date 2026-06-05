@@ -41,20 +41,54 @@ turndownService.addRule('strikethrough', {
     }
 });
 
-// Rule: Capture Heading IDs
+// Rule: Capture Heading IDs and Build Hierarchical Namespaces
 turndownService.addRule('headingIds', {
     filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
     replacement: function (content, node) {
-        const level = node.nodeName.charAt(1);
+        const level = parseInt(node.nodeName.charAt(1));
         const prefix = '#'.repeat(level);
         
-        // FIX: Reverted the forced lowercasing. Cheerio will now pass the exact original casing.
-        const id = node.getAttribute('id');
+        let baseId = '';
         
+        // 1. Try to extract a clean slug from an embedded Markdown link's hash
+        const linkMatch = content.match(/\[.*?\]\(([^"'\s]+).*?\)/);
+        if (linkMatch && linkMatch[1].includes('#')) {
+            baseId = linkMatch[1].split('#').pop().split(':').pop();
+        }
+        
+        // 2. Fallback to HTML id attribute
+        if (!baseId) {
+            baseId = node.getAttribute('id');
+        }
+        
+        // 3. Fallback to alphanumeric text
+        if (!baseId) {
+            let rawText = content.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); 
+            rawText = rawText.replace(/[*_~`]/g, ''); 
+            baseId = rawText.replace(/[^a-zA-Z0-9]/g, ''); 
+            if (!baseId) baseId = `autoHeading${level}`;
+        }
+
+        // --- HIERARCHY STACK MANAGEMENT ---
+        if (!global.headingStack) global.headingStack = [];
+        global.headingStack[level] = baseId;
+        global.headingStack.length = level + 1; // Truncate deeper obsolete levels
+
         const cleanContent = content.replace(/\[\]\(.*?\)/g, '').trim();
-        return id 
-            ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n` 
-            : `\n\n${prefix} ${cleanContent}\n\n`;
+
+        // Prevent namespacing H1s to avoid cluttering the document title
+        if (level === 1) {
+            const finalId = node.getAttribute('id') ? baseId : '';
+            return finalId 
+                ? `\n\n${prefix} ${cleanContent} {#${finalId}}\n\n` 
+                : `\n\n${prefix} ${cleanContent}\n\n`;
+        }
+
+        // Join the stack (H2 and below) to create breadcrumb IDs (e.g., Contents:hither:downfall)
+        const hierarchy = global.headingStack.slice(2).filter(Boolean);
+        const finalId = hierarchy.length > 0 ? hierarchy.join(':') : baseId;
+
+        return `\n\n${prefix} ${cleanContent} {#${finalId}}\n\n`;
     }
 });
 
@@ -240,6 +274,7 @@ async function runPipeline() {
                 const sanitizedHtml = processContent($s, $content, sectionUrl, category);
 
                 if (sanitizedHtml) {
+                    global.headingStack = []; // Reset hierarchy state for the new file
                     let markdown = turndownService.turndown(sanitizedHtml);
                     
                     // Un-escapes Turndown's aggressive backslashes on normal asterisks and brackets

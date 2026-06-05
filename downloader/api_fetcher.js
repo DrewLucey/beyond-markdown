@@ -11,6 +11,7 @@ import axios from 'axios';
 import 'dotenv/config'; 
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
+import * as prettier from 'prettier';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -53,13 +54,14 @@ async function getAuthToken() {
 }
 
 const ENDPOINTS = {
-    classes: 'https://character-service.dndbeyond.com/character/v5/game-data/classes',
-    // subclasses: 'https://character-service.dndbeyond.com/character/v5/game-data/subclasses?baseClassId=2656866',
+    classes: 'https://character-service.dndbeyond.com/character/v5/game-data/classes?includeCustomItems=true',
+    subclasses: 'https://character-service.dndbeyond.com/character/v5/game-data/subclasses',
     spells: 'https://character-service.dndbeyond.com/character/v5/game-data/spells',
     items: 'https://character-service.dndbeyond.com/character/v5.1/game-data/items',
     feats: 'https://character-service.dndbeyond.com/character/v5/game-data/feats',
     backgrounds: 'https://character-service.dndbeyond.com/character/v5/game-data/backgrounds',
     races: 'https://character-service.dndbeyond.com/character/v5/game-data/races',
+    rules: 'https://character-service.dndbeyond.com/character/v5/rule-data',
     monsters: 'https://monster-service.dndbeyond.com/v1/Monster'
 };
 
@@ -76,6 +78,16 @@ function convertToMarkdown(html) {
     if (!html) return "";
     let markdown = turndownService.turndown(html.replace(/&nbsp;|\u00A0/g, ' '));
     return markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
+}
+
+async function formatJson(json) {
+    try {
+        const formatted = await prettier.format(JSON.stringify(json), { parser: "json" });
+        return formatted;
+    } catch (e) {
+        console.warn("JSON formatting failed, returning unformatted JSON.");
+        return JSON.stringify(json);
+    }
 }
 
 async function runApiFetcher() {
@@ -142,6 +154,28 @@ async function runApiFetcher() {
                 await new Promise(r => setTimeout(r, 250)); // Throttle
             }
             items = Array.from(uniqueSpells.values());
+        }
+        else if (TARGET_TYPE === 'subclasses') {
+            console.log(`Sweeping all D&D classes for Subclasses`);
+            const uniqueSubclasses = new Map();
+            const classIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]; 
+            
+            for (const classId of classIds) {
+                try {
+                    const res = await axios.get(`${ENDPOINTS.subclasses}?baseClassId=${classId}`, { headers: reqHeaders });
+                    if (res.data && res.data.data) {
+                        res.data.data.forEach(subclass => {
+                            // Automatically unwrap definitions if they exist during the sweep
+                            const actualSubclass = subclass.definition || subclass;
+                            if (actualSubclass.slug && !uniqueSubclasses.has(actualSubclass.slug)) {
+                                uniqueSubclasses.set(actualSubclass.slug, actualSubclass);
+                            }
+                        });
+                    }
+                } catch (e) { /* Silently ignore deprecated classes */ }
+                await new Promise(r => setTimeout(r, 250)); // Throttle
+            }
+            items = Array.from(uniqueSubclasses.values());
         } 
         // ROUTE 3: Standard Fetch
         else {
@@ -164,6 +198,7 @@ async function runApiFetcher() {
 
             const safeName = item.slug.replace(/[<>:"/\\|?*]+/g, '').trim(); 
             const filePath = path.join(outputDir, `${safeName}.md`);
+            const jsonPath = path.join(outputDir, `${safeName}.json`);
             
             let metaData = "", desc = item.description || item.snippet || item.characteristicsDescription || "";
             
@@ -221,9 +256,11 @@ async function runApiFetcher() {
             }
 
             const markdownDesc = convertToMarkdown(desc);
-            const finalContent = `<ENTRY type="${TARGET_TYPE.toUpperCase()}" name="${item.name}" id="${item.id || ''}">\n${metaData}${markdownDesc}\n</ENTRY>\n<JSON>\n${JSON.stringify(item)}\n</JSON>`;
+            const jsonItem = await formatJson(item);
+            const finalContent = `<ENTRY type="${TARGET_TYPE.toUpperCase()}" name="${item.name}" id="${item.id || ''}">\n${metaData}${markdownDesc}\n</ENTRY>\n<JSON>\n${jsonItem}\n</JSON>`;
 
             fs.writeFileSync(filePath, finalContent);
+            fs.writeFileSync(jsonPath, jsonItem);
             successCount++;
         }
         console.log(`\nSuccess! Saved ${successCount} formatted items to ${outputDir}`);

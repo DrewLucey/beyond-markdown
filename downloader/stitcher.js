@@ -146,6 +146,62 @@ function buildHashDictionary(manifest, srcDir) {
 }
 
 /**
+ * Dynamically builds a hierarchical breadcrumb ID specifically for the Table of Contents (index.md).
+ * Ensures NotebookLM preserves the links while providing deep structural context.
+ */
+function applyHierarchicalHeadingIds(content, bookSlug, chapterSlug) {
+    let currentHierarchy = [];
+    let lines = content.split('\n');
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Matches headings: Starts with 1-6 hashes, text, and an optional existing {#id}
+        const headingMatch = line.match(/^(#{1,6})\s+(.*?)(?:\s+\{#([^}]+)\})?$/);
+        
+        if (headingMatch) {
+            const level = headingMatch[1].length;
+            const headingText = headingMatch[2].trim(); 
+            
+            let targetSlug = "";
+            const linkMatch = headingText.match(/\[.*?\]\(([^"'\s)]+).*?\)/);
+            
+            if (linkMatch) {
+                let url = linkMatch[1];
+                if (url.startsWith('#')) {
+                    targetSlug = url.substring(1);
+                } else {
+                    let cleanUrl = url.split('?')[0].split('#')[0].replace(/\/$/, ""); 
+                    const pathParts = cleanUrl.split('/');
+                    targetSlug = pathParts[pathParts.length - 1]; 
+                    if (targetSlug.toLowerCase() === bookSlug.toLowerCase()) {
+                        targetSlug = 'index';
+                    }
+                }
+            } else {
+                // Non-link headings like "Contents"
+                let rawText = headingText.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); 
+                rawText = rawText.replace(/[*_~`()]/g, ''); 
+                targetSlug = rawText.replace(/\s+/g, '').replace(/[^a-zA-Z0-9-]/g, ''); 
+            }
+
+            if (!targetSlug) targetSlug = `auto${level}`;
+
+            currentHierarchy[level] = targetSlug;
+            currentHierarchy.length = level + 1; // Drop deeper obsolete levels
+
+            if (level > 1) {
+                const breadcrumb = currentHierarchy.slice(2).filter(Boolean).join(':');
+                const finalHash = breadcrumb ? breadcrumb : targetSlug;
+                lines[i] = `${headingMatch[1]} ${headingText} {#${bookSlug.toLowerCase()}:${chapterSlug.toLowerCase()}:${finalHash}}`;
+            } else {
+                lines[i] = `${headingMatch[1]} ${headingText} {#${bookSlug.toLowerCase()}:${chapterSlug.toLowerCase()}}`;
+            }
+        }
+    }
+    return lines.join('\n');
+}
+
+/**
  * Parses and transforms relative Markdown links pointing to other chapter files.
  * Uses the hashDictionary to guarantee URL casing perfectly matches the source material.
  */
@@ -228,7 +284,7 @@ async function runStitcher() {
         const manifest = buildStitcherManifest(sourceDir);
         console.log(`Manifest built: ${manifest.length} chapters loaded.`);
 
-        // NEW: Build the true-casing dictionary from actual Markdown headings
+        // Build the true-casing dictionary from actual Markdown headings
         const hashDictionary = buildHashDictionary(manifest, sourceDir);
         console.log(`Anchor dictionary mapped: Casing secured.\n`);
 
@@ -245,7 +301,12 @@ async function runStitcher() {
             let chapterText = fs.readFileSync(filePath, 'utf-8');
             const chapterSlug = slug.replace('.md', '');
             
-            // NEW: Self-Heal the anchor definitions embedded in the target chapter's body text
+            // NEW: Build hierarchical breadcrumb IDs exclusively for the Table of Contents (Index)
+            if (chapterSlug.toLowerCase() === 'index') {
+                chapterText = applyHierarchicalHeadingIds(chapterText, TARGET_BOOK, chapterSlug);
+            }
+            
+            // Self-Heal the anchor definitions embedded in the target chapter's body text
             chapterText = chapterText.replace(/\{#([^:]+):([^:]+):([^}]+)\}/g, (match, p1, p2, p3) => {
                 const trueHash = hashDictionary[p3.toLowerCase()] || p3;
                 return `{#${p1}:${p2}:${trueHash}}`;

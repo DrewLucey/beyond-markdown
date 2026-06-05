@@ -79,65 +79,37 @@ if (fs.existsSync(repoDir) && fs.statSync(repoDir).isDirectory()) {
     mode = 'sourcebook';
 }
 
-// --- DYNAMIC URN CROSS-REFERENCE MAPPING ---
-const URN_MAP_2014_TO_2024 = {};
-const URN_MAP_2024_TO_2014 = {};
+// ==========================================
+// MIGRATION DICTIONARIES & ALIASES
+// ==========================================
 
-function buildUrnMap() {
-    const reposDir = path.resolve(__dirname, '../sources/repositories');
-    if (!fs.existsSync(reposDir)) return;
-
-    // Grab all raw repo folders, ignoring our generated converted variants (e.g. species_2024)
-    const categories = fs.readdirSync(reposDir).filter(f => {
-        const fullPath = path.join(reposDir, f);
-        return fs.statSync(fullPath).isDirectory() && !f.includes('_');
-    });
-    
-    let matchedPairs = 0;
-
-    categories.forEach(cat => {
-        const catDir = path.join(reposDir, cat);
-        const files = fs.readdirSync(catDir).filter(f => f.endsWith('.md') && !f.startsWith('_'));
-        const nameToRefs = {};
-
-        files.forEach(file => {
-            const content = fs.readFileSync(path.join(catDir, file), 'utf-8');
-            const entryMatch = content.match(/<ENTRY([^>]*)>/);
-            if (!entryMatch) return;
-            
-            const attrs = entryMatch[1];
-            const nameMatch = attrs.match(/name="([^"]+)"/i);
-            const rulesetMatch = attrs.match(/ruleset="([^"]+)"/i);
-            // Matches the URN in the header: {#ref:category:slug}
-            const urnMatch = content.match(/\{#(ref:[^:]+:[^}]+)\}/i);
-
-            if (nameMatch && rulesetMatch && urnMatch) {
-                // Standardize the name (strip "(Legacy)" so 2014 and 2024 items match perfectly)
-                let name = nameMatch[1].toLowerCase().replace(/\s*\(legacy\)/gi, '').trim();
-                let ruleset = rulesetMatch[1].toLowerCase();
-                ruleset = (ruleset.includes('5.5') || ruleset.includes('2024')) ? '2024' : '2014';
-                let urn = urnMatch[1].toLowerCase();
-
-                if (!nameToRefs[name]) nameToRefs[name] = {};
-                nameToRefs[name][ruleset] = urn;
-            }
-        });
-
-        // Pair them up in our global translation dictionaries
-        for (const [name, refs] of Object.entries(nameToRefs)) {
-            if (refs['2014'] && refs['2024']) {
-                URN_MAP_2014_TO_2024[refs['2014']] = refs['2024'];
-                URN_MAP_2024_TO_2014[refs['2024']] = refs['2014'];
-                matchedPairs++;
-            }
-        }
-    });
-
-    console.log(`\n🔍 Dynamically mapped ${matchedPairs} cross-version URN links from local repositories!`);
-}
-
-// Trigger the map build immediately
-buildUrnMap();
+// Dictionary for migrating legacy 2014 basic/free rules links to 2024 Free Rules (br-2024)
+const GLOSSARY_LINKS_2014_TO_2024 = {
+    'invisiblecondition': { name: 'Invisible', slug: '#Invisible[Condition]' },
+    'blindedcondition': { name: 'Blinded', slug: '#Blinded[Condition]' },
+    'charmedcondition': { name: 'Charmed', slug: '#Charmed[Condition]' },
+    'deafenedcondition': { name: 'Deafened', slug: '#Deafened[Condition]' },
+    'exhaustioncondition': { name: 'Exhaustion', slug: '#Exhaustion[Condition]' },
+    'frightenedcondition': { name: 'Frightened', slug: '#Frightened[Condition]' },
+    'grappledcondition': { name: 'Grappled', slug: '#Grappled[Condition]' },
+    'incapacitatedcondition': { name: 'Incapacitated', slug: '#Incapacitated[Condition]' },
+    'paralyzedcondition': { name: 'Paralyzed', slug: '#Paralyzed[Condition]' },
+    'petrifiedcondition': { name: 'Petrified', slug: '#Petrified[Condition]' },
+    'poisonedcondition': { name: 'Poisoned', slug: '#Poisoned[Condition]' },
+    'pronecondition': { name: 'Prone', slug: '#Prone[Condition]' },
+    'restrainedcondition': { name: 'Restrained', slug: '#Restrained[Condition]' },
+    'stunnedcondition': { name: 'Stunned', slug: '#Stunned[Condition]' },
+    'unconsciouscondition': { name: 'Unconscious', slug: '#Unconscious[Condition]' },
+    'surprisedcondition': { name: 'Surprised', slug: '#Surprised' }, 
+    'flyingmovement': { name: 'Flying', slug: '#Flying' },
+    'swimmingmovement': { name: 'Swimming', slug: '#Swimming' },
+    'burrowingmovement': { name: 'Burrowing', slug: '#Burrowing' },
+    'climbingmovement': { name: 'Climbing', slug: '#Climbing' },
+    'blindsight': { name: 'Blindsight', slug: '#Blindsight' },
+    'darkvision': { name: 'Darkvision', slug: '#Darkvision' },
+    'tremorsense': { name: 'Tremorsense', slug: '#Tremorsense' },
+    'truesight': { name: 'Truesight', slug: '#Truesight' }
+};
 
 // Programmatic Weapon Mastery Dictionary Map (Complete SRD 5.2.1 List)
 const WEAPON_MASTERY_MAP = {
@@ -175,6 +147,97 @@ const RENAMED_MONSTERS = {
     'swarm of poisonous snakes': 'Swarm of Venomous Snakes', 'poisonous snake': 'Venomous Snake'
 };
 
+const SPELL_ITEM_ALIASES = {
+    'feeblemind': 'befuddlement',
+    'branding smite': 'shining smite',
+    'arrow of slaying': 'ammunition of slaying',
+    'orb of dragonkind': 'dragon orb',
+    'iron bands of binding': 'iron bands',
+    'deck of many things': 'mysterious deck',
+    'drow poison': 'spider\'s sting',
+    'poison darts': 'poisoned darts',
+    'poison needle': 'poisoned needle',
+    'rolling sphere': 'rolling stone'
+};
+
+// Merged map to allow the URN generator to pair heavily renamed items together
+const CROSS_VERSION_ALIASES = { ...SPELL_ITEM_ALIASES, ...RENAMED_MONSTERS };
+
+// ==========================================
+// DYNAMIC URN CROSS-REFERENCE MAPPING
+// ==========================================
+const URN_MAP_2014_TO_2024 = {};
+const URN_MAP_2024_TO_2014 = {};
+
+function buildUrnMap() {
+    const reposDir = path.resolve(__dirname, '../sources/repositories');
+    if (!fs.existsSync(reposDir)) return;
+
+    // Grab all raw repo folders, ignoring our generated converted variants (e.g. species_2024)
+    const categories = fs.readdirSync(reposDir).filter(f => {
+        const fullPath = path.join(reposDir, f);
+        return fs.statSync(fullPath).isDirectory() && !f.includes('_');
+    });
+    
+    let matchedPairs = 0;
+
+    categories.forEach(cat => {
+        const catDir = path.join(reposDir, cat);
+        const files = fs.readdirSync(catDir).filter(f => f.endsWith('.md') && !f.startsWith('_'));
+        const nameToRefs = {};
+
+        files.forEach(file => {
+            const content = fs.readFileSync(path.join(catDir, file), 'utf-8');
+            const entryMatch = content.match(/<ENTRY([^>]*)>/);
+            if (!entryMatch) return;
+            
+            const attrs = entryMatch[1];
+            const nameMatch = attrs.match(/name="([^"]+)"/i);
+            const rulesetMatch = attrs.match(/ruleset="([^"]+)"/i);
+            // Matches the URN in the header: {#ref:category:slug}
+            const urnMatch = content.match(/\{#(ref:[^:]+:[^}]+)\}/i);
+
+            if (nameMatch && rulesetMatch && urnMatch) {
+                // Capture the exact proper name directly from the XML to fix capitalization (e.g. "Cure Wounds")
+                let rawName = nameMatch[1];
+                let properName = rawName.replace(/\s*\(legacy\)/gi, '').trim();
+                let normalizedName = properName.toLowerCase();
+                
+                let ruleset = rulesetMatch[1].toLowerCase();
+                ruleset = (ruleset.includes('5.5') || ruleset.includes('2024')) ? '2024' : '2014';
+                let urn = urnMatch[1].toLowerCase();
+
+                // Alias Routing: Force 2014 renames (like feeblemind) to pair under the 2024 key
+                if (ruleset === '2014' && CROSS_VERSION_ALIASES[normalizedName]) {
+                    normalizedName = CROSS_VERSION_ALIASES[normalizedName];
+                }
+
+                if (!nameToRefs[normalizedName]) nameToRefs[normalizedName] = {};
+                // We now store both the URN and the perfectly capitalized target name
+                nameToRefs[normalizedName][ruleset] = { urn, properName };
+            }
+        });
+
+        // Pair them up in our global translation dictionaries
+        for (const [name, refs] of Object.entries(nameToRefs)) {
+            if (refs['2014'] && refs['2024']) {
+                URN_MAP_2014_TO_2024[refs['2014'].urn] = { urn: refs['2024'].urn, name: refs['2024'].properName, oldName: refs['2014'].properName };
+                URN_MAP_2024_TO_2014[refs['2024'].urn] = { urn: refs['2014'].urn, name: refs['2014'].properName, oldName: refs['2024'].properName };
+                matchedPairs++;
+            }
+        }
+    });
+
+    console.log(`\n🔍 Dynamically mapped ${matchedPairs} cross-version URN links from local repositories!`);
+}
+
+// Trigger the map build immediately
+buildUrnMap();
+
+// ==========================================
+// GLOSSARY REPLACEMENTS (PROSE ONLY)
+// ==========================================
+
 // Dictionary of Regex Replacements for SRD 5.2.1 wording updates
 const GLOSSARY_TERMS_2024 = [
     { rx: /\bMelee Weapon Attack:/gi, rep: "Melee Attack Roll:" },
@@ -203,7 +266,10 @@ const GLOSSARY_TERMS_2024 = [
     { rx: /\bDraconic Bloodline\b/gi, rep: "Draconic Sorcery" },
     { rx: /\bSchool of Evocation\b/gi, rep: "Evoker" },
     { rx: /\bInspiration\b(?! Point)/g, rep: "Heroic Inspiration" }, 
-    { rx: /\bKi(?= point| feature|\b)/gi, rep: "Focus" },
+    
+    // Safely replaces Ki with Focus, explicitly skipping hyphenated phrases like "Ki-rin"
+    { rx: /(?<!\-)\bKi\b(?!\-)/gi, rep: "Focus" },
+    
     { rx: /\bRace\b/g, rep: "Species" },
     { rx: /\bRaces\b/g, rep: "Species" },
     { rx: /\bSubrace\b/g, rep: "Subspecies" },
@@ -237,6 +303,99 @@ const GLOSSARY_TERMS_2024 = [
 
 function convertWording(text, direction) {
     let result = text;
+    const urnMap = direction === '2014to2024' ? URN_MAP_2014_TO_2024 : URN_MAP_2024_TO_2014;
+
+    // --- 1. UPDATE URNs, URLs, AND EXACT CAPITALIZATION IN LINKS ---
+    
+    // Target Markdown Links with URN Titles: [Text](https://... "ref:category:slug")
+    result = result.replace(/\[(.*?)\]\(([^)\s]+)\s+"(ref:[^"]+)"\)/gi, (match, linkText, url, urn) => {
+        const urnLower = urn.toLowerCase();
+        if (urnMap[urnLower]) {
+            const newUrnData = urnMap[urnLower];
+            const newUrn = newUrnData.urn; // The fully swapped 2024 URN
+            const newSlug = newUrn.split(':')[2]; 
+            // Replace only the final slug segment of the URL safely
+            const newUrl = url.replace(/\/([^/]*)$/, `/${newSlug}`);
+            
+            // Surgically update the link text capitalization/name while preserving markdown wrapping
+            let formattedName = linkText;
+            const oldNameLower = newUrnData.oldName.toLowerCase();
+            const linkTextLower = linkText.toLowerCase();
+
+            // Example: "cure wounds" inside "**cure wounds**" becomes "Cure Wounds"
+            // Example: "feeblemind" inside "**feeblemind**" becomes "Befuddlement"
+            if (linkTextLower.includes(oldNameLower)) {
+                const idx = linkTextLower.indexOf(oldNameLower);
+                formattedName = linkText.substring(0, idx) + newUrnData.name + linkText.substring(idx + oldNameLower.length);
+            } else {
+                // If the exact substring isn't found (e.g. they linked a weird word), fallback to wrapping the new name
+                const formatMatch = linkText.match(/^([*_]*)(.*?)([*_]*)$/);
+                if (formatMatch) {
+                    formattedName = `${formatMatch[1]}${newUrnData.name}${formatMatch[3]}`;
+                }
+            }
+
+            return `[${formattedName}](${newUrl} "${newUrn}")`;
+        }
+        return match;
+    });
+
+    // Target Basic Rules / Free Rules Links: [Text](https://...basic-rules...#hash)
+    if (direction === '2014to2024') {
+        result = result.replace(/\[([^\]]+)\]\((https?:\/\/www\.dndbeyond\.com\/sources\/(?:dnd\/)?(?:basic-rules|free-rules)[^#)\s]*#([^)\s"]+))(.*?)\)/gi, (match, linkText, fullUrl, hash, suffix) => {
+            const hashLower = hash.toLowerCase();
+            if (GLOSSARY_LINKS_2014_TO_2024[hashLower]) {
+                const newData = GLOSSARY_LINKS_2014_TO_2024[hashLower];
+                const newUrl = `https://www.dndbeyond.com/sources/dnd/br-2024/rules-glossary${newData.slug}`;
+                
+                let formattedName = linkText;
+                const oldTextClean = linkText.replace(/[*_]/g, '').toLowerCase();
+                
+                // If the visible text matches the old phrase (e.g., "invisible"), capitalize/rename it safely
+                if (linkText.toLowerCase().includes(oldTextClean) && oldTextClean.length > 2) {
+                    formattedName = linkText.replace(new RegExp(oldTextClean, 'i'), newData.name);
+                } else {
+                    const formatMatch = linkText.match(/^([*_]*)(.*?)([*_]*)$/);
+                    if (formatMatch) formattedName = `${formatMatch[1]}${newData.name}${formatMatch[3]}`;
+                }
+
+                return `[${formattedName}](${newUrl}${suffix})`;
+            }
+            return match;
+        });
+    }
+
+    // Target standalone URNs: {#ref:...} or (#ref:...)
+    result = result.replace(/([({])#(ref:[a-z0-9-]+:[a-z0-9-]+)([)}])/gi, (match, prefix, urn, suffix) => {
+        const urnLower = urn.toLowerCase();
+        if (urnMap[urnLower]) {
+            return `${prefix}#${urnMap[urnLower].urn}${suffix}`;
+        }
+        return match; 
+    });
+
+    // --- 2. STASH URLs AND ENTIRE LINKS TO PROTECT THEM FROM PROSE REPLACEMENT ---
+    const stashedItems = [];
+    
+    // Protect completely formed Markdown Links so glossary injections never break them
+    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/gi, (match) => {
+        stashedItems.push(match);
+        return `__PROTECT_${stashedItems.length - 1}__`;
+    });
+
+    // Protect all remaining http/https URLs so words like "feeblemind" in the slug don't get overwritten
+    result = result.replace(/https?:\/\/[^\s"'\)]+/gi, (match) => {
+        stashedItems.push(match);
+        return `__PROTECT_${stashedItems.length - 1}__`;
+    });
+    
+    // Protect all URN strings
+    result = result.replace(/ref:[a-z0-9-]+:[a-z0-9-]+/gi, (match) => {
+        stashedItems.push(match);
+        return `__PROTECT_${stashedItems.length - 1}__`;
+    });
+
+    // --- 3. APPLY PROSE TRANSLATIONS ---
     if (direction === '2014to2024') {
         GLOSSARY_TERMS_2024.forEach(({ rx, rep }) => {
             result = result.replace(rx, rep);
@@ -249,17 +408,9 @@ function convertWording(text, direction) {
         result = result.replace(/Armor Training/gi, "Armor Proficiency");
     }
 
-    // --- URN CROSS-REFERENCE REPLACEMENTS ---
-    // Surgically swaps internal `ref:` tags across your generated files based on our dynamic map
-    const urnMap = direction === '2014to2024' ? URN_MAP_2014_TO_2024 : URN_MAP_2024_TO_2014;
-    
-    // Finds and captures (#ref:category:slug) or {#ref:category:slug}
-    result = result.replace(/([({])#(ref:[a-z0-9-]+:[a-z0-9-]+)([)}])/gi, (match, prefix, urn, suffix) => {
-        const urnLower = urn.toLowerCase();
-        if (urnMap[urnLower]) {
-            return `${prefix}#${urnMap[urnLower]}${suffix}`;
-        }
-        return match; 
+    // --- 4. UNSTASH URLs AND URNs ---
+    result = result.replace(/__PROTECT_(\d+)__/g, (match, index) => {
+        return stashedItems[parseInt(index)];
     });
 
     return result;
@@ -377,7 +528,7 @@ function processConversion() {
         
         let content = fs.readFileSync(filePath, 'utf-8');
         
-        // Apply prose translation
+        // Apply prose translation (which now safely handles URLs internally)
         content = convertWording(content, DIRECTION);
 
         // --- UPDATE INTERNAL HEADING IDS AND LINKS TO THE NEW SLUG ---
@@ -401,8 +552,8 @@ function processConversion() {
         content = content.replace(/(<SOURCEBOOK[^>]*ruleset=")[^"]+(")/i, `$1${newRulesetName}$2`);
         // ------------------------------------------------------------------
 
-        // Save to new file named with the new ruleset version
-        const newFileName = `${mapEntry.title} (${newRulesetName}).md`;
+        // Save to new file named with the new ruleset version using the sanitized title
+        const newFileName = `${safeTitle} (${newRulesetName}).md`;
         const newOutDir = path.resolve(__dirname, `../sources/${newRulesetName}`);
         
         if (!fs.existsSync(newOutDir)) fs.mkdirSync(newOutDir, { recursive: true });

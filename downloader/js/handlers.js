@@ -508,10 +508,13 @@ export function processContent($, $content, sectionUrl, category = 'GENERAL') {
                     const cleanUrl = val.split('?')[0].split('#')[0].replace(/\/$/, "");
                     const pathParts = cleanUrl.split('/');
                     const entitySlug = pathParts[pathParts.length - 1];
-                    // Result: title="ref:monster:16817-bugbear"
-                    $(el).attr('title', `ref:${matchedType.toLowerCase()}:${entitySlug}`);
+                    
+                    // Set the href to the internal RAG anchor, and save the original URL in the title
+                    $(el).attr('href', `#ref:${matchedType.toLowerCase()}:${entitySlug}`);
+                    $(el).attr('title', val);
                 } catch(e) {
-                    $(el).attr('title', `ref:${matchedType.toLowerCase()}`);
+                    $(el).attr('href', `#ref:${matchedType.toLowerCase()}`);
+                    $(el).attr('title', val);
                 }
             }
         } else {
