@@ -1,266 +1,392 @@
 /**
  * bulk_extract.js
- * Handles paginated listings and wraps items for the central Repository Stitcher.
+ * The Ultimate Compendium Extractor.
+ * Handles paginated listings, bypasses anti-bot measures, and wraps items for the central Repository Stitcher.
  */
-import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
-import path from 'path';
-import fs from 'fs';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import TurndownService from 'turndown';
-import { gfm } from 'turndown-plugin-gfm'; 
-import { processContent } from './js/handlers.js';
+import { createRequire } from "module";
+import { fileURLToPath } from "url";
+import path from "path";
+import fs from "fs";
+import axios from "axios";
+import * as cheerio from "cheerio";
+import TurndownService from "turndown";
+import { gfm } from "turndown-plugin-gfm";
+import { processContent, formatMarkdown } from "./js/handlers.js";
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 1. Load Authentication
-const configPath = path.resolve(__dirname, '../config.cjs');
-const config = require(configPath);
+// 1. Load Authentication & Maps
+const configPath = path.resolve(__dirname, "../config.cjs");
+let config = {};
+try {
+  config = require(configPath);
+} catch (e) {}
+
+const mapFilePath = path.resolve(__dirname, "../sources/ruleset_map.json");
+let rulesMap = {};
+if (fs.existsSync(mapFilePath)) {
+  try {
+    rulesMap = JSON.parse(fs.readFileSync(mapFilePath, "utf-8"));
+  } catch (e) {
+    console.warn("Could not parse ruleset_map.json.");
+  }
+}
 
 // 2. Initialize Turndown
-const turndownService = new TurndownService({ 
-    headingStyle: 'atx', 
-    codeBlockStyle: 'fenced' 
+const turndownService = new TurndownService({
+  headingStyle: "atx",
+  codeBlockStyle: "fenced",
 });
 turndownService.use(gfm);
 
-// --- THE STRIKETHROUGH OVERRIDE ---
-turndownService.addRule('strikethrough', {
-    filter: ['del', 's', 'strike'],
-    replacement: function (content) {
-        return '~~' + content + '~~';
-    }
+turndownService.addRule("strikethrough", {
+  filter: ["del", "s", "strike"],
+  replacement: function (content) {
+    return "~~" + content + "~~";
+  },
 });
 
-// Rule: Capture Heading IDs (Sync with extract.js)
-turndownService.addRule('headingIds', {
-    filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
-    replacement: function (content, node) {
-        const level = node.nodeName.charAt(1);
-        const prefix = '#'.repeat(level);
-        const id = node.getAttribute('id');
-        const cleanContent = content.replace(/\[\]\(.*?\)/g, '').trim();
-        return id 
-            ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n` 
-            : `\n\n${prefix} ${cleanContent}\n\n`;
-    }
+// Rule: Capture Heading IDs
+turndownService.addRule("headingIds", {
+  filter: ["h1", "h2", "h3", "h4", "h5", "h6"],
+  replacement: function (content, node) {
+    const level = node.nodeName.charAt(1);
+    const prefix = "#".repeat(level);
+    const id = node.getAttribute("id");
+    const cleanContent = content.replace(/\[\]\(.*?\)/g, "").trim();
+    return id
+      ? `\n\n${prefix} ${cleanContent} {#${id}}\n\n`
+      : `\n\n${prefix} ${cleanContent}\n\n`;
+  },
 });
+
+// Rule: Clean Blockquote Formatting for Read-Aloud Text
+turndownService.addRule("blockquotes", {
+  filter: "blockquote",
+  replacement: function (content) {
+    content = content.replace(/^\n+|\n+$/g, "");
+    content = content.replace(/^/gm, "> ");
+    return `\n\n${content}\n\n`;
+  },
+});
+
+// Explicit URL-to-Singular mapping table
+const CATEGORY_SINGULAR_MAP = {
+  "/classes": "class",
+  "/backgrounds": "background",
+  "/species": "species",
+  "/races": "species", // Supplant 'races' entirely with 'species'
+  "/feats": "feat",
+  "/spells": "spell",
+  "/equipment": "item",
+  "/magic-items": "magic-item",
+  "/monsters": "monster",
+  "/vehicles": "vehicle",
+};
 
 async function runBulkPipeline() {
-    const args = process.argv.slice(2);
-    if (args.length === 0) {
-        console.error("Usage: node bulk_extract.js <CATEGORY>");
-        console.error("Example: node bulk_extract.js feats");
-        process.exit(1);
-    }
+  const args = process.argv.slice(2);
+  if (args.length === 0) {
+    console.error("Usage: node bulk_extract.js <CATEGORY>");
+    console.error("Example: node bulk_extract.js feats");
+    process.exit(1);
+  }
 
-    // --- NEW: SANITIZE USER INPUT ---
-    let rawInput = args[0].trim();
-    // Automatically adds a leading slash if you didn't type one
-    const targetPath = rawInput.startsWith('/') ? rawInput : '/' + rawInput;
-    // Strips the slash for naming your folders and categories securely
-    const categoryName = targetPath.replace(/[^a-zA-Z0-9_-]/g, '');
-    // --------------------------------
+  // --- SANITIZE USER INPUT ---
+  let rawInput = args[0].trim();
+  // Automatically adds a leading slash if you didn't type one
+  const targetPath = rawInput.startsWith("/") ? rawInput : "/" + rawInput;
 
-    const outputDir = path.join(__dirname, '..', 'sources', 'repositories', categoryName);
+  let categoryFolderName = targetPath.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (categoryFolderName === "races") categoryFolderName = "species"; // Supplant directory name
 
-    if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-    }
+  const outputDir = path.join(
+    __dirname,
+    "..",
+    "sources",
+    "repositories",
+    categoryFolderName,
+  );
 
-    console.log(`\n--- Starting Bulk Extract for ${categoryName.toUpperCase()} ---`);
-    console.log(`📁 Output Directory: ${outputDir}`);
-    
-    let currentPage = 1;
-    let hasNext = true;
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
 
-    // --- ROBUST AUTH & HEADERS ---
-    // Safely resolve the token whether it's in config or directly in process.env
-    const sessionToken = config.cobaltSession || config.DNDBEYOND_COBALT_SESSION || process.env.COBALTSESSION || '';
-    const reqHeaders = { 
-        'Cookie': sessionToken ? `CobaltSession=${sessionToken}` : '',
-        // Full User-Agent required to bypass Cloudflare anti-bot checks
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9'
-    };
+  console.log(
+    `\n--- Starting Bulk Extract for ${categoryFolderName.toUpperCase()} ---`,
+  );
+  console.log(`📁 Output Directory: ${outputDir}`);
 
-    while (hasNext) {
-        console.log(`\nScouting Page ${currentPage}...`);
-        const pageUrl = `https://www.dndbeyond.com${targetPath}?page=${currentPage}`;
-        
-        try {
-            const res = await axios.get(pageUrl, { headers: reqHeaders });
-            const $ = cheerio.load(res.data);
-            const items = [];
+  let currentPage = 1;
+  let hasNext = true;
 
-            // --- THE ANCHOR SCAVENGER ---
-            // Hunts for links by URL pattern instead of CSS classes (Resilient to UI updates)
-            const categoryBase = `${targetPath}/`; // e.g., '/feats/'
-            
-            $('a').each((_, el) => {
-                let url = $(el).attr('href');
-                if (!url) return;
+  // --- ROBUST AUTH & HEADERS ---
+  const sessionToken =
+    config.cobaltSession ||
+    config.DNDBEYOND_COBALT_SESSION ||
+    process.env.COBALTSESSION ||
+    "";
+  const reqHeaders = {
+    Cookie: sessionToken ? `CobaltSession=${sessionToken}` : "",
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+    Accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+  };
 
-                // FIX 1: DDB's new grids use absolute URLs. Normalize to a relative path first.
-                const relativeUrl = url.replace('https://www.dndbeyond.com', '');
-                
-                // If it's a link to an item in our target category (e.g. /species/1830524-geleton)
-                if (relativeUrl.startsWith(categoryBase) && relativeUrl.length > categoryBase.length) {
-                    
-                    // Ignore pagination links, comments, and marketplace redirects
-                    if (relativeUrl.includes('?') || relativeUrl.includes('#') || relativeUrl.includes('/marketplace/')) return;
-                    
-                    // FIX 2: Target the specific title class to prevent grabbing subtitle metadata
-                    let name = $(el).find('.listing-card__title').text().trim() || $(el).text().replace(/\s+/g, ' ').trim();
-                    
-                    // Ignore empty links or icon-only links
-                    if (!name || name.length < 2) return; 
-                    
-                    // Ensure the final URL we push to the queue is absolute
-                    if (!url.startsWith('http')) url = 'https://www.dndbeyond.com' + url;
-                    
-                    // Deduplicate (DDB often renders desktop/mobile lists twice in the DOM)
-                    if (!items.find(i => i.url === url)) {
-                        items.push({ name, url });
-                    }
-                }
-            });
+  const items = [];
 
-            if (items.length === 0) {
-                console.log(`  ! No items found on this page. (If unexpected, DDB HTML may have changed or Cloudflare blocked the request)`);
+  while (hasNext) {
+    process.stdout.write(`\rScouting Page ${currentPage}...`);
+    const pageUrl = `https://www.dndbeyond.com${targetPath}?filter-partnered-content=t&page=${currentPage}`;
+
+    try {
+      const res = await axios.get(pageUrl, { headers: reqHeaders });
+      const $ = cheerio.load(res.data, {
+        lowerCaseTags: false,
+        lowerCaseAttributeNames: false,
+      });
+
+      // --- THE ANCHOR SCAVENGER ---
+      const categoryBase = `${targetPath}/`;
+      let foundOnPage = 0;
+
+      $("a").each((_, el) => {
+        let url = $(el).attr("href");
+        if (!url) return;
+
+        const relativeUrl = url.replace("https://www.dndbeyond.com", "");
+
+        if (
+          relativeUrl.startsWith(categoryBase) &&
+          relativeUrl.length > categoryBase.length
+        ) {
+          // Ignore pagination, comments, and explicit marketplace links
+          if (
+            relativeUrl.includes("?") ||
+            relativeUrl.includes("#") ||
+            relativeUrl.includes("/marketplace/") ||
+            url.includes("marketplace.dndbeyond.com")
+          )
+            return;
+
+          let name =
+            $(el).find(".listing-card__title").text().trim() ||
+            $(el).text().replace(/\s+/g, " ").trim();
+          if (!name || name.length < 2) return;
+
+          if (!url.startsWith("http")) url = "https://www.dndbeyond.com" + url;
+
+          // Scrape sourcebook from listing page if available (crucial for /classes)
+          let listSource = "";
+          const $card = $(el).closest(
+            "[data-collapsible-search], .listing-card",
+          );
+          if ($card.length > 0) {
+            const dataSearch = $card.attr("data-collapsible-search");
+            if (dataSearch && dataSearch.includes("|")) {
+              listSource = dataSearch.split("|")[1].trim();
+            } else {
+              const sourceDiv = $card
+                .find(".listing-card__source")
+                .text()
+                .trim();
+              if (sourceDiv) listSource = sourceDiv;
             }
+          }
 
-            for (const item of items) {
-                console.log(`[Page ${currentPage}] Extracting: ${item.name}`);
-                
-                // Fast-fail if the URL is blatantly a marketplace link
-                if (item.url.includes('/marketplace/')) {
-                    console.log(`  > Skipped (Unowned): ${item.name}`);
-                    continue;
-                }
-
-                try {
-                    const itemRes = await axios.get(item.url, { headers: reqHeaders });
-
-                    // Check if DDB secretly redirected us to the marketplace due to lack of ownership
-                    if (itemRes.request.res.responseUrl.includes('/marketplace/')) {
-                        console.log(`  > Skipped (Unowned Redirect): ${item.name}`);
-                        continue;
-                    }
-
-                    const $s = cheerio.load(itemRes.data);
-                    let $content = null;
-                    const selectors = ['.page-content', '.p-article-content', '.primary-content', 'main', 'article', '.container', '.details-container'];
-                    
-                    for (const sel of selectors) {
-                        const found = $s(sel);
-                        if (found.length > 0) {
-                            $content = found.first();
-                            break;
-                        }
-                    }
-
-                    if ($content && $content.length > 0) {
-                        // --- EXTRACT ID FOR TARGET ANCHOR ---
-                        const idMatch = item.url.match(/\/(\d+)-/);
-                        const entityId = idMatch ? idMatch[1] : '';
-
-                        // --- SOURCE & RULESET TAGGING ---
-                        let sourceText = "";
-                        const sourceEl = $content.find('.source, .spell-source, .monster-source, .magic-item-source, .equipment-source, .article-source').first();
-                        if (sourceEl.length > 0) {
-                            sourceText = sourceEl.text().replace(/\s+/g, ' ').trim();
-                        }
-
-                        let rulesetTag = "5e";
-                        if (sourceText.includes('2024')) rulesetTag = '2024';
-                        else if (sourceText.includes('2014')) rulesetTag = '2014';
-                        
-                        let isLegacyFlag = "false";
-
-                        // --- THE BADGE SANITIZER & ANCHOR TARGET INJECTION ---
-                        const legacyBadge = $content.find('.badge, #legacy-badge');
-                        const mainHeader = $content.find('h1').first();
-
-                        if (mainHeader.length > 0) {
-                            // 1. Force the H1 to use our unique, scoped ID (e.g., id="Aasimar-1751434")
-                            const safeNameForAnchor = item.name.replace(/\s+\(Legacy\)/i, '').replace(/[^a-zA-Z0-9]/g, '');
-                            if (entityId && safeNameForAnchor) {
-                                mainHeader.attr('id', `${safeNameForAnchor}-${entityId}`);
-                            }
-                        }
-
-                        if (legacyBadge.length > 0) {
-                            isLegacyFlag = "true";
-                            if (rulesetTag === "5e") rulesetTag = "2014"; // Legacy badge heavily implies 2014 or older
-
-                            // 2. Destroy the tooltips and links from the DOM entirely
-                            $content.find('.badge-tooltip, .badge-text, .badge-cta').remove();
-                            
-                            // 3. Extract just the raw text of the header
-                            let baseTitle = mainHeader.contents().filter(function() {
-                                return this.nodeType === 3; // Grabs strictly the text node
-                            }).text().replace(/\s+/g, ' ').trim();
-                            
-                            // 4. Rewrite the header cleanly
-                            if (baseTitle) {
-                                mainHeader.text(`${baseTitle} (Legacy)`);
-                            }
-                            
-                            // 5. Remove the badge container so Turndown doesn't read the word "Legacy" twice
-                            legacyBadge.remove();
-                        }
-                        // ---------------------------
-                        
-                        const category = categoryName.toUpperCase();
-                        
-                        // Pass through handler pipeline to scrub layout artifacts
-                        const cleanHtml = processContent($s, $content, item.url, category);
-                        
-                        // Generate pure Markdown
-                        let markdown = turndownService.turndown(cleanHtml);
-                        
-                        // --- THE ASTERISK FIX ---
-                        markdown = markdown.replace(/\\\*/g, '*'); 
-                        markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, ''); 
-
-                        // ENVELOPING FOR STITCHER:
-                        // Adds XML-style metadata tags so the Stitcher knows how to sort this
-                        const wrappedMarkdown = `<ENTRY type="${category}" name="${item.name}" source_url="${item.url}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}" source_book="${sourceText}">\n${markdown}\n</ENTRY>`;
-                        
-                        // --- THE ID PRESERVATION FIX ---
-                        // Extract the numerical ID from the URL (e.g. /species/12345-orc -> 12345)
-                        const idMatchForFile = item.url.match(/\/(\d+)-/);
-                        const entityIdPrefix = idMatchForFile ? `${idMatchForFile[1]}-` : '';
-                        
-                        const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
-                        // Prepend the ID to the filename to prevent overwrites (e.g. "12345-Orc.md")
-                        const finalFileName = `${entityIdPrefix}${safeName}.md`;
-                        
-                        fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
-                    }
-                } catch (e) { 
-                    console.error(`  > Error on ${item.name}: ${e.message}`); 
-                }
-                
-                await new Promise(r => setTimeout(r, 1000)); // Throttling
-            }
-
-            // Check for D&D Beyond's "Next" button pagination
-            hasNext = $('.b-pagination-item-next a').length > 0;
-            currentPage++;
-
-        } catch(e) {
-            console.error(`Failed to load page ${currentPage}: ${e.message}`);
-            break; // Stop loop if the main listing page crashes
+          // Deduplicate
+          if (!items.find((i) => i.url === url)) {
+            items.push({ name, url, listSource });
+            foundOnPage++;
+          }
         }
+      });
+
+      if (foundOnPage === 0 && items.length === 0) {
+        console.log(
+          `\n  ! No items found on this page. (DDB HTML may have changed or Cloudflare blocked the request)`,
+        );
+      }
+
+      hasNext = $(".b-pagination-item-next a").length > 0;
+      if (hasNext) currentPage++;
+
+      await new Promise((r) => setTimeout(r, 250)); // Throttling
+    } catch (e) {
+      console.error(`\nFailed to load page ${currentPage}: ${e.message}`);
+      break;
+    }
+  }
+
+  console.log(`\nFound ${items.length} items. Starting extraction...\n`);
+  let successCount = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+
+    // Fast-fail if the URL is blatantly a marketplace link
+    if (
+      item.url.includes("marketplace.dndbeyond.com") ||
+      item.url.includes("/marketplace/")
+    ) {
+      console.warn(`\n  > Skipped (Unowned): ${item.name}`);
+      continue;
     }
 
-    console.log(`\nSuccess! Extraction complete for ${targetPath}.`);
+    try {
+      const itemRes = await axios.get(item.url, { headers: reqHeaders });
+
+      // Check if DDB secretly redirected us to the marketplace due to lack of ownership
+      const finalUrl = itemRes.request?.res?.responseUrl || item.url;
+      if (
+        finalUrl.includes("marketplace.dndbeyond.com") ||
+        finalUrl.includes("/marketplace/")
+      ) {
+        console.warn(`\n  > Skipped (Unowned Redirect): ${item.name}`);
+        continue;
+      }
+
+      const $s = cheerio.load(itemRes.data, {
+        lowerCaseTags: false,
+        lowerCaseAttributeNames: false,
+      });
+      let $content = null;
+      const selectors = [
+        ".page-content",
+        ".p-article-content",
+        ".primary-content",
+        "main",
+        "article",
+        ".container",
+        ".details-container",
+      ];
+
+      for (const sel of selectors) {
+        const found = $s(sel);
+        if (found.length > 0) {
+          $content = found.first();
+          break;
+        }
+      }
+
+      if ($content && $content.length > 0) {
+        // --- SOURCE & RULESET TAGGING ---
+        let sourceText = item.listSource || "";
+        const sourceEl = $content
+          .find(
+            ".source, .spell-source, .monster-source, .equipment-source, .magic-item-source, .source-summary, .static-container-footer-content span",
+          )
+          .first();
+        if (sourceEl.length > 0) {
+          const extractedSource = sourceEl.text().replace(/\s+/g, " ").trim();
+          if (extractedSource) {
+            sourceText = extractedSource;
+          }
+        }
+
+        let rulesetTag = "5e";
+        let foundInMap = false;
+
+        if (sourceText) {
+          const cleanSourceTitle = sourceText.split(",")[0].trim();
+          for (const key in rulesMap) {
+            if (rulesMap[key].title === cleanSourceTitle) {
+              rulesetTag = rulesMap[key].ruleset || rulesetTag;
+              foundInMap = true;
+              break;
+            }
+          }
+        }
+
+        if (!foundInMap) {
+          if (sourceText.includes("2024")) rulesetTag = "2024";
+          else if (sourceText.includes("2014")) rulesetTag = "2014";
+        }
+
+        // --- THE BADGE SANITIZER ---
+        const legacyBadge = $s(".badge, #legacy-badge");
+        let finalItemName = item.name.trim();
+        let isLegacyFlag = "false";
+
+        if (legacyBadge.length > 0) {
+          isLegacyFlag = "true";
+          $s(".badge-tooltip, .badge-text, .badge-cta").remove();
+
+          if (!finalItemName.toLowerCase().includes("(legacy)")) {
+            finalItemName = `${finalItemName} (Legacy)`;
+          }
+          legacyBadge.remove();
+        }
+
+        $content.find("h1, .page-title").remove();
+
+        // --- SINGULAR RESOLUTION ---
+        const singularCategory =
+          CATEGORY_SINGULAR_MAP[targetPath] ||
+          categoryFolderName.replace(/es$/, "").replace(/s$/, "");
+        const entryTypeTag = singularCategory.toUpperCase().replace(/-/g, "_"); // e.g. MAGIC_ITEM, SPELL, ITEM
+
+        // --- DOUBLE-DOMAIN IMAGE FIX ---
+        $content.find("img, a").each((_, el) => {
+          const attr = $s(el).is("img") ? "src" : "href";
+          let val = $s(el).attr(attr);
+          if (val && val.startsWith("//")) {
+            $s(el).attr(attr, "https:" + val);
+          }
+        });
+
+        const cleanHtml = processContent($s, $content, item.url, entryTypeTag);
+        let markdown = turndownService.turndown(cleanHtml);
+
+        // --- ESCAPE CHARACTER FIX ---
+        markdown = markdown.replace(/\\\*/g, "*");
+        markdown = markdown.replace(/\\\[/g, "[");
+        markdown = markdown.replace(/\\\]/g, "]");
+
+        // --- FILE & SLUG PREPARATION ---
+        const idMatchForFile = item.url.match(/\/(\d+)-/);
+        const entityIdPrefix = idMatchForFile ? `${idMatchForFile[1]}-` : "";
+        const safeName = item.name.replace(/[<>:"/\\|?*]+/g, "").trim();
+        const finalFileName = `${entityIdPrefix}${safeName}.md`;
+        const itemSlug = item.url.split("/").pop().split("?")[0].toLowerCase();
+
+        // --- URN TITLE INJECTION ---
+        const urnHeader = `# ${finalItemName} {#ref:${singularCategory}:${itemSlug}}\n\n`;
+        markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, "");
+        markdown = urnHeader + markdown;
+
+        // --- NAMESPACE HEADING IDS ---
+        markdown = markdown.replace(/\{#([^}]+)\}/g, (match, p1) => {
+          if (p1.startsWith("ref:")) return match;
+          return `{#${singularCategory}:${itemSlug}:${p1}}`;
+        });
+
+        // ENVELOPING FOR STITCHER
+        let wrappedMarkdown = `<ENTRY type="${entryTypeTag}" name="${finalItemName}" source_url="${item.url}" source_book="${sourceText}" ruleset="${rulesetTag}" is_legacy="${isLegacyFlag}">\n\n${markdown}\n</ENTRY>`;
+
+        // FORMAT PASS (PRETTIER)
+        wrappedMarkdown = await formatMarkdown(wrappedMarkdown);
+
+        fs.writeFileSync(path.join(outputDir, finalFileName), wrappedMarkdown);
+        successCount++;
+        process.stdout.write(
+          `\r[${i + 1}/${items.length}] Extracted: ${item.name.substring(0, 40).padEnd(40)}`,
+        );
+      }
+    } catch (e) {
+      console.error(`\n  > Error on ${item.name}: ${e.message}`);
+    }
+
+    await new Promise((r) => setTimeout(r, 1000)); // Throttling
+  }
+
+  console.log(
+    `\n\nSuccess! Saved ${successCount} formatted items to ${outputDir}`,
+  );
 }
 
 runBulkPipeline();
