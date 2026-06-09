@@ -191,5 +191,26 @@ async function handleCharacter() {
     await runScript(path.join(__dirname, 'downloader/character_compiler.js'));
 }
 
+// --- STARTUP LOGIC ---
+async function init() {
+    console.clear();
+    console.log("Beyond-Markdown Pipeline Orchestrator");
+    console.log("---------------------------------------\n");
+    console.log("Initializing: Updating library metadata...\n");
+    
+    try {
+        await runScript(path.join(__dirname, 'downloader/library.js'));
+    } catch (err) {
+        console.error(`\nFailed to update library metadata: ${err.message}\n`);
+    }
+    
+    console.log("\n---------------------------------------");
+    await inquirer.prompt([
+        { type: 'input', name: 'enter', message: 'Press Enter to continue to the Main Menu...' }
+    ]);
+    
+    mainMenu();
+}
+
 // Start the app
-mainMenu();
+init();
