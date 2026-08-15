@@ -253,7 +253,7 @@ import { getSessionToken } from "../utils/auth.js";`nconst sessionToken = getSes
         // --- NAMESPACE HEADING IDS ---
         markdown = markdown.replace(/\{#([^}]+)\}/g, (match, p1) => {
           if (p1.startsWith("ref:")) return match;
-          return `{#${singularCategory}:${itemSlug}:${p1}}`;
+          return `{#${singularCategory}:${itemSlug}:${p1.toLowerCase()}}`;
         });
 
         // ENVELOPING FOR STITCHER

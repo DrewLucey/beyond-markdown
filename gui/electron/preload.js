@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
     getSources: () => ipcRenderer.invoke('get-sources'),
@@ -10,5 +10,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     authCobalt: () => ipcRenderer.invoke('auth-cobalt'),
     checkAuth: () => ipcRenderer.invoke('check-auth'),
     signOut: () => ipcRenderer.invoke('sign-out'),
-    onExtractionLog: (callback) => ipcRenderer.on('extraction-log', (event, data) => callback(data))
+    refreshLibrary: () => ipcRenderer.invoke('refresh-library'),
+    readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
+    readMarkdownHeader: (filePath) => ipcRenderer.invoke('read-markdown-header', filePath),
+    convertLocalFile: (filePath, targetRuleset, outputPath) => ipcRenderer.invoke('convert-local-file', filePath, targetRuleset, outputPath),
+    openInBrowser: (markdown, title) => ipcRenderer.invoke('open-in-browser', markdown, title),
+    onExtractionLog: (callback) => ipcRenderer.on('extraction-log', (event, data) => callback(data)),
+    getFilePath: (file) => webUtils ? webUtils.getPathForFile(file) : file.path
 });

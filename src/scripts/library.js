@@ -21,7 +21,7 @@ const sessionToken = getSessionToken();
 async function crawlLibrary() {
     function extractJsonArray(html, keyName) {
         const searchString = `"${keyName}":[`;
-        const startIndex = html.indexOf(searchString);
+        const startIndex = html.lastIndexOf(searchString);
         if (startIndex === -1) return null;
         let bracketCount = 0;
         let inString = false;
@@ -82,14 +82,22 @@ async function crawlLibrary() {
     const licensesRes = await axios.get(LICENSES_URL, { headers: reqHeaders });
     const $licenses = cheerio.load(licensesRes.data);
 
+    function normalizeTitle(str) {
+      if (!str) return '';
+      return str.toLowerCase()
+          .replace(/[\u2018\u2019]/g, "'")
+          .replace(/\s*\(.*?\)\s*/g, '')
+          .replace(/[^a-z0-9]/g, '');
+    }
+
     // D&D Beyond's license page changed, let's extract ownership from the table
     // It's a table with rows. The second column has the source title.
     const visibleOwnedSlugs = new Set();
+    const visibleOwnedTitles = new Set();
     $licenses('table tr').each((_, el) => {
         const titleText = $licenses(el).find('td:nth-child(2)').text().trim();
         if (titleText) {
-            // We just have the title, not the slug. We'll have to match by title later.
-            // Or maybe it has links? Let's check for links.
+            visibleOwnedTitles.add(normalizeTitle(titleText));
             const $link = $licenses(el).find('a');
             if ($link.length > 0) {
                 const relativePath = $link.attr("href");
@@ -97,7 +105,6 @@ async function crawlLibrary() {
                     visibleOwnedSlugs.add(relativePath.split("/").pop());
                 }
             } else {
-                // Keep the exact title to match later if there is no link
                 visibleOwnedSlugs.add(titleText.toLowerCase());
             }
         }
@@ -192,7 +199,8 @@ async function crawlLibrary() {
           }
 
           const isCardVisible = visibleOwnedSlugs.has(slug) || 
-                                (source.name && visibleOwnedSlugs.has(source.name.toLowerCase()));
+                                (source.name && visibleOwnedTitles.has(normalizeTitle(source.name))) ||
+                                (configName && visibleOwnedTitles.has(normalizeTitle(configName)));
 
           // Map the exact schema values required for AI routing + comprehensive repo data
           sourceMap[slug] = {
@@ -213,9 +221,10 @@ async function crawlLibrary() {
             isFree: source.isFree === true,
             isReleased: source.isReleased !== false,
             releaseDate: source.releaseDate || null,
-            // OVERRIDE: Cross-reference with the DOM to establish true ownership
-            // The Next.js payload is bugged and returns isOwned: true for everything.
-            isOwned: isCardVisible,
+            // The Next.js streaming payload has multiple states. We grab the LAST occurrence 
+            // which contains the final hydration state after entitlements resolve.
+            // We also cross-reference with the licenses page just in case.
+            isOwned: isCardVisible || source.isOwned === true,
             isSharedWithMe: source.isSharedWithMe === true,
             isFavorite: source.isFavorite === true,
             isOnWishlist: source.isOnWishlist === true,

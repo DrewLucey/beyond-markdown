@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef } from "react";
+import ToolsTab from "../components/ToolsTab";
+import MarkdownSvg from "../components/MarkdownSvg";
 
 export default function Home() {
   const [sources, setSources] = useState(null);
@@ -11,8 +13,25 @@ export default function Home() {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [username, setUsername] = useState("");
   
+  useEffect(() => {
+    // Prevent default drag/drop behaviors globally so dropping a file outside a dropzone doesn't navigate the Electron window
+    const preventDefault = (e) => e.preventDefault();
+    window.addEventListener('dragover', preventDefault);
+    window.addEventListener('drop', preventDefault);
+
+    window.addEventListener('dragenter', preventDefault);
+    window.addEventListener('dragleave', preventDefault);
+
+    return () => {
+      window.removeEventListener('dragover', preventDefault);
+      window.removeEventListener('drop', preventDefault);
+      window.removeEventListener('dragenter', preventDefault);
+      window.removeEventListener('dragleave', preventDefault);
+    };
+  }, []);
+  
   // View state
-  const [activeTab, setActiveTab] = useState("library"); // "library" | "rules"
+  const [activeTab, setActiveTab] = useState("library"); // "library" | "rules" | "tools"
   
   // Library Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -32,7 +51,7 @@ export default function Home() {
 
   const ruleCategories = [
     { slug: "classes", label: "Classes" },
-    { slug: "backgrounds", label: "Background" },
+    { slug: "backgrounds", label: "Backgrounds" },
     { slug: "races", label: "Species/Races" },
     { slug: "feats", label: "Feats" },
     { slug: "spells", label: "Spells" },
@@ -51,6 +70,16 @@ export default function Home() {
     monsters: "https://wizardsprod.a.bigcontent.io/v1/static/monsters"
   };
 
+  const refreshLibrary = async () => {
+    if (!window.electronAPI) return;
+    await window.electronAPI.refreshLibrary();
+    const data = await window.electronAPI.getSources();
+    if (data) {
+      const sorted = Object.values(data).sort((a, b) => b.isOwned - a.isOwned);
+      setSources(sorted);
+    }
+  };
+
   useEffect(() => {
     if (typeof window !== "undefined" && window.electronAPI) {
       
@@ -58,6 +87,7 @@ export default function Home() {
         setIsSignedIn(res.success);
         if (res.success) {
           setUsername(res.message);
+          refreshLibrary(); // Refresh silently in the background
         } else {
           setAuthMsg("");
         }
@@ -98,6 +128,9 @@ export default function Home() {
       if (authRes.success) {
         setIsSignedIn(true);
         setUsername(authRes.message);
+        setAuthMsg("Refreshing library...");
+        await refreshLibrary();
+        setAuthMsg("");
       }
     } else {
       setAuthMsg("Authentication failed.");
@@ -109,6 +142,7 @@ export default function Home() {
     setIsSignedIn(false);
     setUsername("");
     setAuthMsg("");
+    setHistory({});
   };
 
   const handleExtractSourcebook = async (slug, title, ruleset) => {
@@ -190,7 +224,7 @@ export default function Home() {
   const accessibleSources = useMemo(() => {
     if (!sources) return [];
     return sources.filter(source => {
-      if (source.title === "D&D Beyond Drops" || source.slug === "ddb-drops") return false;
+      if (source.title.startsWith("D&D Beyond Drops") || source.slug === "ddb-drops") return false;
       if (!isSignedIn && !source.isFree) return false;
       if (!(source.isOwned || source.isSharedWithMe || source.isFree)) return false;
       return true;
@@ -260,14 +294,7 @@ export default function Home() {
     </button>
   );
 
-  const MarkdownSvg = () => (
-    <svg fill="currentColor" viewBox="0 0 208 128" xmlns="http://www.w3.org/2000/svg" className="inline-block ml-1.5" style={{ height: '1.4em' }}>
-      <g>
-        <path clipRule="evenodd" d="m15 10c-2.7614 0-5 2.2386-5 5v98c0 2.761 2.2386 5 5 5h178c2.761 0 5-2.239 5-5v-98c0-2.7614-2.239-5-5-5zm-15 5c0-8.28427 6.71573-15 15-15h178c8.284 0 15 6.71573 15 15v98c0 8.284-6.716 15-15 15h-178c-8.28427 0-15-6.716-15-15z" fillRule="evenodd"/>
-        <path d="m30 98v-68h20l20 25 20-25h20v68h-20v-39l-20 25-20-25v39zm125 0-30-33h20v-35h20v35h20z"/>
-      </g>
-    </svg>
-  );
+
 
   return (
     <main className="pt-8 px-8 pb-0 h-full flex flex-col">
@@ -278,7 +305,7 @@ export default function Home() {
             <span className="text-white font-bold text-[1.12em]" style={{ fontFamily: "'Gill Sans', 'Gill Sans MT', Calibri, sans-serif" }}>MARKDOWN</span>
           </h1>
         </div>
-        <div className="flex flex-col items-end">
+        <div className="relative flex flex-col items-end">
           <button 
             onClick={handleAuth}
             disabled={isSignedIn}
@@ -290,11 +317,11 @@ export default function Home() {
           >
             {isSignedIn ? username : "Sign In to D&D Beyond"}
           </button>
-          {!isSignedIn && authMsg && <span className="text-sm mt-2 text-green-400">{authMsg}</span>}
+          {!isSignedIn && authMsg && <span className="absolute top-full right-0 text-sm mt-2 text-green-400 whitespace-nowrap">{authMsg}</span>}
           {isSignedIn && (
             <button 
               onClick={handleSignOut} 
-              className="text-xs text-red-500 hover:text-white font-sans tracking-wider mt-2 pr-2 transition-colors cursor-pointer"
+              className="absolute top-full right-0 text-xs text-red-500 hover:text-white font-sans tracking-wider mt-2 pr-2 transition-colors cursor-pointer whitespace-nowrap"
             >
               SIGN OUT
             </button>
@@ -315,6 +342,12 @@ export default function Home() {
           className={`pb-2 px-4 font-medium transition-colors relative z-10 ${activeTab === "rules" ? "text-red-400 border-b-2 border-red-500 -mb-[1px]" : "text-gray-500 hover:text-gray-300"}`}
         >
           Rules
+        </button>
+        <button 
+          onClick={() => setActiveTab("tools")}
+          className={`pb-2 px-4 font-medium transition-colors relative z-10 ${activeTab === "tools" ? "text-red-400 border-b-2 border-red-500 -mb-[1px]" : "text-gray-500 hover:text-gray-300"}`}
+        >
+          Tools
         </button>
       </div>
 
@@ -527,36 +560,37 @@ export default function Home() {
             {ruleCategories.map(cat => {
               const lastExtracted = history[cat.slug];
               return (
-                <div 
-                  key={cat.slug} 
-                  onClick={() => toggleRuleSelection(cat.slug)}
-                  className={`cursor-pointer border-2 py-3 px-5 rounded-xl flex items-center justify-between transition-all duration-300 shadow-sm hover:shadow-md ${
-                    selectedRules.has(cat.slug) 
-                      ? 'bg-gray-800/80 border-[#E2E2E2] scale-[1.02]' 
-                      : 'bg-gray-800 border-gray-700 hover:border-[#E2E2E2] hover:scale-[1.01]'
-                  }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    {ruleIcons[cat.slug] && (
-                      <img 
-                        src={ruleIcons[cat.slug]} 
-                        className={`h-[1.25em] w-auto object-contain transition-opacity duration-300 ${selectedRules.has(cat.slug) ? 'opacity-100' : 'opacity-60'}`} 
-                        style={{ filter: "brightness(0) invert(1)" }}
-                        alt="" 
-                      />
-                    )}
-                    <div className="flex flex-col items-start justify-center">
-                      <h3 className="font-sans font-[800] text-[1.1rem] text-gray-200 leading-none">{cat.label}</h3>
+                <div key={cat.slug} className="flex flex-col gap-1">
+                  <div 
+                    onClick={() => toggleRuleSelection(cat.slug)}
+                    className={`cursor-pointer border-2 py-3 px-5 rounded-xl flex items-center justify-between transition-all duration-300 shadow-sm hover:shadow-md ${
+                      selectedRules.has(cat.slug) 
+                        ? 'bg-gray-800/80 border-[#E2E2E2] scale-[1.02]' 
+                        : lastExtracted
+                          ? 'bg-green-900/40 hover:bg-green-800 text-green-300 border-green-700/50 hover:border-green-500 hover:scale-[1.01]'
+                          : 'bg-gray-800 border-gray-700 hover:border-[#E2E2E2] hover:scale-[1.01]'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      {ruleIcons[cat.slug] && (
+                        <img 
+                          src={ruleIcons[cat.slug]} 
+                          className={`h-[1.25em] w-auto object-contain transition-opacity duration-300 ${selectedRules.has(cat.slug) || lastExtracted ? 'opacity-100' : 'opacity-60'}`} 
+                          style={{ filter: "brightness(0) invert(1)" }}
+                          alt="" 
+                        />
+                      )}
+                      <div className="flex flex-col items-start justify-center">
+                        <h3 className={`font-sans font-[800] text-[1.1rem] leading-none ${!selectedRules.has(cat.slug) && lastExtracted ? 'text-green-300' : 'text-gray-200'}`}>{cat.label}</h3>
+                      </div>
                     </div>
                   </div>
                   
-                  <div className="flex flex-col items-end justify-center ml-2 text-right">
-                    {lastExtracted && (
-                      <span className="text-[9px] text-green-400/80 font-mono leading-tight">
-                        Extracted:<br/>{new Date(lastExtracted).toLocaleDateString()}
-                      </span>
-                    )}
-                  </div>
+                  {lastExtracted && (
+                    <div className="text-[10px] text-green-400/80 text-center font-mono w-full">
+                      Extracted: {new Date(lastExtracted).toLocaleDateString()}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -564,12 +598,16 @@ export default function Home() {
         </div>
       )}
 
+      {activeTab === "tools" && (
+        <ToolsTab />
+      )}
+
       {/* Terminal Modal */}
       {isExtracting && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-8">
           <div className="bg-gray-900 border border-[#E2E2E2]/30 rounded-xl shadow-[0_0_50px_rgba(226,226,226,0.1)] w-full max-w-4xl h-[70vh] flex flex-col overflow-hidden">
             <div className="bg-black/50 px-6 py-4 border-b border-gray-800 flex justify-between items-center">
-              <h2 className="font-serif text-xl text-gray-200">Extraction Progress</h2>
+              <h2 className="font-sans font-[800] tracking-wider text-xl text-gray-200">Extraction Progress</h2>
             </div>
             <div className="flex-1 p-6 overflow-y-auto styled-scrollbar font-mono text-sm text-green-400 leading-relaxed whitespace-pre-wrap">
               {logs.map((log, i) => (

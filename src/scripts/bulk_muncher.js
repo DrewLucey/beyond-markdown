@@ -312,7 +312,7 @@ async function runBulkMuncher() {
                     markdown = markdown.replace(/\{#([^}]+)\}/g, (match, p1) => {
                         // Don't double-namespace the URN we just injected
                         if (p1.startsWith('ref:')) return match;
-                        return `{#${cleanCategory}:${itemSlug}:${p1}}`;
+                        return `{#${cleanCategory}:${itemSlug}:${p1.toLowerCase()}}`;
                     });
 
                     // Add a double newline after the ENTRY tag for readability

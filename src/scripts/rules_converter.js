@@ -14,72 +14,84 @@ const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CATEGORY = process.argv[2];
-const RAW_TARGET = process.argv[3]; // '5e', '2014', '5.5e', or '2024'
+const IS_MAIN = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
-if (!CATEGORY || !RAW_TARGET) {
-    console.error('Usage: node rules_converter.js <category_or_slug> <target_ruleset>');
-    console.error('Example: node rules_converter.js species 2024');
-    process.exit(1);
-}
-
-const normalizedTarget = RAW_TARGET.toLowerCase();
+let CATEGORY = '';
+let RAW_TARGET = '';
+let normalizedTarget = '';
 let TARGET_RULESET = '';
 let DIRECTION = '';
 
-// Map user shorthand to internal routing logic
-if (normalizedTarget === '5e' || normalizedTarget === '2014') {
-    TARGET_RULESET = '2014';
-    DIRECTION = '2024to2014';
-} else if (normalizedTarget === '5.5e' || normalizedTarget === '2024') {
-    TARGET_RULESET = '2024';
-    DIRECTION = '2014to2024';
-} else {
-    console.error("Invalid target ruleset. Please use '5e', '2014', '5.5e', or '2024'.");
-    process.exit(1);
+if (IS_MAIN) {
+    CATEGORY = process.argv[2];
+    RAW_TARGET = process.argv[3];
+
+    if (!CATEGORY || !RAW_TARGET) {
+        console.error('Usage: node rules_converter.js <category_or_slug> <target_ruleset>');
+        console.error('Example: node rules_converter.js species 2024');
+        process.exit(1);
+    }
+
+    normalizedTarget = RAW_TARGET.toLowerCase();
+
+    // Map user shorthand to internal routing logic
+    if (normalizedTarget === '5e' || normalizedTarget === '2014') {
+        TARGET_RULESET = '2014';
+        DIRECTION = '2024to2014';
+    } else if (normalizedTarget === '5.5e' || normalizedTarget === '2024') {
+        TARGET_RULESET = '2024';
+        DIRECTION = '2014to2024';
+    } else {
+        console.error("Invalid target ruleset. Please use '5e', '2014', '5.5e', or '2024'.");
+        process.exit(1);
+    }
 }
 
-// --- CHECK FOR ALREADY CONVERTED SLUGS ---
-if (CATEGORY.endsWith('-x-2014') || CATEGORY.endsWith('-x-2024')) {
-    console.log(`\n✅ The source "${CATEGORY}" is already a converted variant.`);
-    console.log(`No conversion necessary!\n`);
-    process.exit(0);
+if (IS_MAIN) {
+    if (CATEGORY.endsWith('-x-2014') || CATEGORY.endsWith('-x-2024')) {
+        console.log(`\n✅ The source "${CATEGORY}" is already a converted variant.`);
+        console.log(`No conversion necessary!\n`);
+        process.exit(0);
+    }
 }
 
 // --- DETERMINE MODE (REPO VS SOURCEBOOK) AND LOAD MAP ---
 const mapFilePath = path.resolve(__dirname, '../sources/ruleset_map.json');
 let rulesMap = {};
 let mapEntry = null;
-
-if (fs.existsSync(mapFilePath)) {
-    try {
-        rulesMap = JSON.parse(fs.readFileSync(mapFilePath, 'utf-8'));
-        mapEntry = rulesMap[CATEGORY];
-
-        if (mapEntry && mapEntry.ruleset) {
-            let mapRuleset = mapEntry.ruleset.toLowerCase();
-            let normalizedMapRuleset =
-                mapRuleset.includes('5.5') || mapRuleset.includes('2024') ? '2024' : '2014';
-
-            if (normalizedMapRuleset === TARGET_RULESET) {
-                console.log(
-                    `\n✅ The source "${CATEGORY}" is already formatted for the ${TARGET_RULESET} ruleset.`,
-                );
-                console.log(`No conversion necessary!\n`);
-                process.exit(0);
-            }
-        }
-    } catch (e) {
-        console.warn('Could not parse ruleset_map.json for ruleset validation.');
-    }
-}
-
 let mode = 'unknown';
-const repoDir = path.resolve(__dirname, `../sources/repositories/${CATEGORY}`);
-if (fs.existsSync(repoDir) && fs.statSync(repoDir).isDirectory()) {
-    mode = 'repo';
-} else {
-    mode = 'sourcebook';
+let repoDir = '';
+
+if (IS_MAIN) {
+    if (fs.existsSync(mapFilePath)) {
+        try {
+            rulesMap = JSON.parse(fs.readFileSync(mapFilePath, 'utf-8'));
+            mapEntry = rulesMap[CATEGORY];
+
+            if (mapEntry && mapEntry.ruleset) {
+                let mapRuleset = mapEntry.ruleset.toLowerCase();
+                let normalizedMapRuleset =
+                    mapRuleset.includes('5.5') || mapRuleset.includes('2024') ? '2024' : '2014';
+
+                if (normalizedMapRuleset === TARGET_RULESET) {
+                    console.log(
+                        `\n✅ The source "${CATEGORY}" is already formatted for the ${TARGET_RULESET} ruleset.`,
+                    );
+                    console.log(`No conversion necessary!\n`);
+                    process.exit(0);
+                }
+            }
+        } catch (e) {
+            console.warn('Could not parse ruleset_map.json for ruleset validation.');
+        }
+    }
+
+    repoDir = path.resolve(__dirname, `../sources/repositories/${CATEGORY}`);
+    if (fs.existsSync(repoDir) && fs.statSync(repoDir).isDirectory()) {
+        mode = 'repo';
+    } else {
+        mode = 'sourcebook';
+    }
 }
 
 // ==========================================
@@ -405,7 +417,7 @@ const GLOSSARY_TERMS_2024 = [
     { rx: /\bproficiency bonus\b/g, rep: 'Proficiency Bonus' },
 ];
 
-function convertWording(text, direction) {
+export function convertWording(text, direction) {
     let result = text;
     const urnMap = direction === '2014to2024' ? URN_MAP_2014_TO_2024 : URN_MAP_2024_TO_2014;
 
@@ -707,4 +719,7 @@ function processConversion() {
     }
 }
 
-processConversion();
+if (IS_MAIN) {
+    buildUrnMap();
+    processConversion();
+}

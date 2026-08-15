@@ -218,7 +218,7 @@ function applyHierarchicalHeadingIds(content, bookSlug, chapterSlug) {
                 const breadcrumb = currentHierarchy.slice(2).filter(Boolean).join(':');
                 const finalHash = breadcrumb ? breadcrumb : targetSlug;
                 lines[i] =
-                    `${headingMatch[1]} ${headingText} {#${bookSlug.toLowerCase()}:${chapterSlug.toLowerCase()}:${finalHash}}`;
+                    `${headingMatch[1]} ${headingText} {#${bookSlug.toLowerCase()}:${chapterSlug.toLowerCase()}:${finalHash.toLowerCase()}}`;
             } else {
                 lines[i] =
                     `${headingMatch[1]} ${headingText} {#${bookSlug.toLowerCase()}:${chapterSlug.toLowerCase()}}`;
@@ -262,7 +262,7 @@ function transformMarkdownLinks(
             // Self-Heal: Swap the broken lowercase hash for the true CamelCase hash
             const trueHash = hashDictionary[cleanHash.toLowerCase()] || cleanHash;
 
-            const finalHash = `#${bookSlug}:${currentSlug}:${trueHash}`;
+            const finalHash = `#${bookSlug.toLowerCase()}:${currentSlug.toLowerCase()}:${trueHash.toLowerCase()}`;
             const originalUrl = `${baseUrl}/${currentSlug}#${trueHash}`;
             return `[${text}](${finalHash} "${originalUrl}")`;
         }
@@ -310,12 +310,15 @@ function transformMarkdownLinks(
                     return `[${text}](#${crossBookSlug.toLowerCase()} "${url}")`;
                 }
             }
-        } else if (url.endsWith('.md') || url.includes('.md#')) {
+        } else if (!url.startsWith('http') || url.endsWith('.md') || url.includes('.md#')) {
             let cleanUrl = url.split('?')[0];
             const hashIndex = url.indexOf('#');
 
             hash = hashIndex !== -1 ? url.substring(hashIndex) : '';
             targetSlug = cleanUrl.split('#')[0].replace('.md', '');
+            if (targetSlug.startsWith('./')) {
+                targetSlug = targetSlug.substring(2);
+            }
         }
 
         if (targetSlug && validChapterIds.has(targetSlug)) {
@@ -327,8 +330,8 @@ function transformMarkdownLinks(
             }
 
             const finalHash = trueHash
-                ? `#${bookSlug}:${targetSlug}:${trueHash}`
-                : `#${bookSlug}:${targetSlug}`;
+                ? `#${bookSlug.toLowerCase()}:${targetSlug.toLowerCase()}:${trueHash.toLowerCase()}`
+                : `#${bookSlug.toLowerCase()}:${targetSlug.toLowerCase()}`;
 
             const urlTargetSlug = targetSlug === 'index' ? '' : `/${targetSlug}`;
             const originalUrl = trueHash
@@ -384,7 +387,7 @@ async function runStitcher() {
                 /\{#([^:]+):([^:]+):([^}]+)\}/g,
                 (match, p1, p2, p3) => {
                     const trueHash = hashDictionary[p3.toLowerCase()] || p3;
-                    return `{#${p1}:${p2}:${trueHash}}`;
+                    return `{#${p1.toLowerCase()}:${p2.toLowerCase()}:${trueHash.toLowerCase()}}`;
                 },
             );
 

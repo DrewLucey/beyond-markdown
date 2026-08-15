@@ -326,10 +326,10 @@ async function runPipeline() {
           markdown = markdown.replace(/\\\]/g, "]");
 
           // --- NAMESPACE HEADING IDS ---
-          // Converts {#WhatDwellsHere} -> {#wdotmm:dungeon-level:WhatDwellsHere} (Preserving Casing)
+          // Converts {#WhatDwellsHere} -> {#wdotmm:dungeon-level:whatdwellshere}
           markdown = markdown.replace(
             /\{#([^}]+)\}/g,
-            (match, p1) => `{#${bookSlug}:${fileSlug}:${p1}}`,
+            (match, p1) => `{#${bookSlug}:${fileSlug}:${p1.toLowerCase()}}`,
           );
 
           markdown = markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, "");

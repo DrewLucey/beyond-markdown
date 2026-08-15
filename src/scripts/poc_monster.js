@@ -26,7 +26,7 @@ turndownService.addRule('headingIds', {
         
         // This relies on a global variable or passing it through; for POC we hardcode the monster slug
         const monsterSlug = global.CURRENT_MONSTER_SLUG || 'monster';
-        const finalId = `${monsterSlug}:${baseId}`;
+        const finalId = `${monsterSlug}:${baseId.toLowerCase()}`;
         
         return `\n\n${prefix} ${cleanContent} {#${finalId}}\n\n`;
     }

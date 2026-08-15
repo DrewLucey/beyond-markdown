@@ -22,6 +22,6 @@ export function getSessionToken() {
     }
 
     return (
-        config.cobaltSession || config.DNDBEYOND_COBALT_SESSION || process.env.COBALTSESSION || ''
+        process.env.COBALTSESSION || config.cobaltSession || config.DNDBEYOND_COBALT_SESSION || ''
     );
 }
