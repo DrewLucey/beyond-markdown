@@ -19,8 +19,9 @@ try {
     // Update all XML ruleset tags
     const entryMatch = content.match(/(<[A-Z]+[^>]*ruleset=")([^"]+)(")/i);
     if (entryMatch) {
-        content = content.replace(/(<[A-Z]+[^>]*ruleset=")([^"]+)(")/ig, `$1${targetRuleset}$3`);
-        console.log(`Updated XML ruleset attributes to ${targetRuleset}`);
+        const rulesetLabel = targetRuleset === '2024' ? '5.5e' : '5e';
+        content = content.replace(/(<[A-Z]+[^>]*ruleset=")([^"]+)(")/ig, `$1${rulesetLabel}$3`);
+        console.log(`Updated XML ruleset attributes to ${rulesetLabel}`);
     }
 
     // Optional: Add migration alert for mechanics if going to 2024
