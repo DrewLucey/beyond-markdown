@@ -13,3 +13,5 @@ src/sources/**/*.md
 src/sources/test_scripts/
 test_*.cjs
 *.md
+# Agent context
+.ai/
