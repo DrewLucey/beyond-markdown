@@ -6,14 +6,16 @@
   "type": "module",
   "scripts": {
     "beyond-markdown": "node index.js",
-    "library": "node downloader/library.js",
-    "extract": "node downloader/bulk_extract.js",
-    "fetch": "node downloader/api_fetcher.js",
-    "munch": "node downloader/bulk_muncher.js",
-    "stitch": "node downloader/stitcher.js",
-    "stitch-repo": "node downloader/repo_stitcher.js",
-    "compile": "node downloader/character_compiler.js",
-    "convert": "node downloader/rules_converter.js"
+    "library": "node src/scripts/library.js",
+    "extract": "node src/scripts/bulk_extract.js",
+    "fetch": "node src/scripts/api_fetcher.js",
+    "munch": "node src/scripts/bulk_muncher.js",
+    "stitch": "node src/scripts/stitcher.js",
+    "stitch-repo": "node src/scripts/repo_stitcher.js",
+    "compile": "node src/scripts/character_compiler.js",
+    "convert": "node src/scripts/rules_converter.js",
+    "format": "prettier --write \"**/*.js\"",
+    "lint": "eslint src index.js"
   },
   "repository": {
     "type": "git",
