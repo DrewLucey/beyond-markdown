@@ -6,7 +6,9 @@ const targetRuleset = process.argv[3]; // '2014' or '2024'
 const destinationFile = process.argv[4];
 
 if (!sourceFile || !targetRuleset || !destinationFile) {
-    console.error("Usage: node file_converter.js <source_file> <target_ruleset> <destination_file>");
+    console.error(
+        'Usage: node file_converter.js <source_file> <target_ruleset> <destination_file>',
+    );
     process.exit(1);
 }
 
@@ -20,7 +22,7 @@ try {
     const entryMatch = content.match(/(<[A-Z]+[^>]*ruleset=")([^"]+)(")/i);
     if (entryMatch) {
         const rulesetLabel = targetRuleset === '2024' ? '5.5e' : '5e';
-        content = content.replace(/(<[A-Z]+[^>]*ruleset=")([^"]+)(")/ig, `$1${rulesetLabel}$3`);
+        content = content.replace(/(<[A-Z]+[^>]*ruleset=")([^"]+)(")/gi, `$1${rulesetLabel}$3`);
         console.log(`Updated XML ruleset attributes to ${rulesetLabel}`);
     }
 
@@ -28,7 +30,10 @@ try {
     if (direction === '2014to2024' && content.match(/<ENTRY[^>]*chapter="species"/i)) {
         content = content.replace(/\*\*Ability Score Increase\*\*.*?(\n|$)/gi, '');
         // Inject below header if possible
-        content = content.replace(/^(#\s+.*?\n\n)/m, `$1> **[MIGRATION ALERT]:** *Ability Score Increases must be selected via custom 2024 background profiles.*\n\n`);
+        content = content.replace(
+            /^(#\s+.*?\n\n)/m,
+            `$1> **[MIGRATION ALERT]:** *Ability Score Increases must be selected via custom 2024 background profiles.*\n\n`,
+        );
     }
 
     console.log(`Applying ${direction} wording translation...`);

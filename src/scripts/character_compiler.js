@@ -5,55 +5,15 @@
  * If no ID is provided, fetches and displays a list of the user's characters.
  */
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
-import readline from 'readline';
-import 'dotenv/config';
+import { getDirname } from '../utils/paths.js';
+import { getAuthToken } from '../utils/auth.js';
+import { askQuestion } from '../utils/cli.js';
 
 const require = createRequire(import.meta.url);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// 1. Load Configuration
-const configPath = path.resolve(__dirname, '../config.cjs');
-let config = {};
-try {
-    config = require(configPath);
-} catch (e) {
-    console.error('Config missing, falling back to process.env');
-}
-
-const cobaltSession = process.env.COBALTSESSION || config.cobaltSession || '';
-
-function askQuestion(query) {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-    });
-    return new Promise((resolve) =>
-        rl.question(query, (ans) => {
-            rl.close();
-            resolve(ans);
-        }),
-    );
-}
-
-// 2. Authentication Handshake
-async function getAuthToken() {
-    console.log('Authenticating with D&D Beyond Auth Service...');
-    if (!cobaltSession) throw new Error('Missing COBALTSESSION in .env or config.cjs');
-
-    try {
-        const res = await axios.post('https://auth-service.dndbeyond.com/v1/cobalt-token', null, {
-            headers: { Cookie: `CobaltSession=${cobaltSession}` },
-        });
-        return res.data.token;
-    } catch (err) {
-        throw new Error(`Authentication Failed: ${err.message}`);
-    }
-}
+const __dirname = getDirname(import.meta.url);
 
 // Math Helper for 5e Modifiers
 function getModifier(score) {
@@ -71,7 +31,9 @@ const STAT_MAP = {
     6: { key: 'cha', name: 'CHA' },
 };
 
-// 3. Main Fetch and Compile Logic
+/**
+ * Main Fetch and Compile Logic
+ */
 async function runCharacterCompiler() {
     let input = process.argv[2];
 
@@ -96,13 +58,10 @@ async function runCharacterCompiler() {
                 userId = payload.userId || payload.user_id || payload.sub;
             } catch (e) {}
 
-            // Method B: Aggressive Fallback Scrape for Next.js
             if (!userId) {
+                // Fetch the fallback /account page if JWT doesn't have the user ID
                 const res = await axios.get('https://www.dndbeyond.com/account', {
-                    headers: {
-                        Cookie: `CobaltSession=${cobaltSession}`,
-                        'User-Agent': reqHeaders['User-Agent'],
-                    },
+                    headers: reqHeaders, // uses Bearer token, but might need Cookie if it fails
                 });
 
                 // D&D Beyond's Next.js payloads (both normal and streaming escaped strings)

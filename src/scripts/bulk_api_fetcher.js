@@ -4,46 +4,27 @@
  * Supports paginated and non-paginated D&D Beyond API endpoints.
  */
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
-import 'dotenv/config';
-import TurndownService from 'turndown';
-import { gfm } from 'turndown-plugin-gfm';
 import * as prettier from 'prettier';
-import { loadConfig, getAlignment, getSize, getMonsterType, getChallengeRating, getSense, getMovement, getStat, getSkill } from '../core/translator.js';
+import {
+    loadConfig,
+    getAlignment,
+    getSize,
+    getMonsterType,
+    getChallengeRating,
+    getSense,
+    getMovement,
+    getStat,
+    getSkill,
+} from '../core/translator.js';
+import { getDirname } from '../utils/paths.js';
+import { getAuthToken } from '../utils/auth.js';
+import { convertToMarkdown } from '../utils/markdown.js';
 
 const require = createRequire(import.meta.url);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// 1. Load Configuration
-const configPath = path.resolve(__dirname, '../config.cjs');
-let config = {};
-try { config = require(configPath); } catch (e) { }
-
-const cobaltSession = process.env.COBALTSESSION || config.cobaltSession || '';
-
-const turndownService = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
-turndownService.use(gfm);
-turndownService.addRule('strikethrough', {
-    filter: ['del', 's', 'strike'],
-    replacement: content => '~~' + content + '~~'
-});
-
-async function getAuthToken() {
-    console.log('Authenticating with D&D Beyond Auth Service...');
-    if (!cobaltSession) throw new Error('Missing COBALTSESSION in .env or config.cjs');
-    try {
-        const res = await axios.post('https://auth-service.dndbeyond.com/v1/cobalt-token', null, {
-            headers: { Cookie: `CobaltSession=${cobaltSession}` },
-        });
-        return res.data.token;
-    } catch (err) {
-        throw new Error(`Authentication Failed: ${err.message}`);
-    }
-}
+const __dirname = getDirname(import.meta.url);
 
 const ENDPOINTS = {
     classes: 'https://character-service.dndbeyond.com/character/v5/game-data/classes',
@@ -64,15 +45,15 @@ if (outIndex > -1 && process.argv.length > outIndex + 1) {
     CUSTOM_OUT_DIR = process.argv[outIndex + 1];
 }
 
-function convertToMarkdown(html) {
-    if (!html) return '';
-    let markdown = turndownService.turndown(html.replace(/&nbsp;|\u00A0/g, ' '));
-    return markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, '');
-}
-
+/**
+ * Fetches bulk game data from the D&D Beyond API, parsing and writing the
+ * response as unified formatted Markdown entries.
+ */
 async function runBulkApiFetcher() {
     if (!TARGET_TYPE || !ENDPOINTS[TARGET_TYPE]) {
-        console.error(`Usage: node bulk_api_fetcher.js <category> [--homebrew] [--out <path>]\nAvailable: ${Object.keys(ENDPOINTS).join(', ')}`);
+        console.error(
+            `Usage: node bulk_api_fetcher.js <category> [--homebrew] [--out <path>]\nAvailable: ${Object.keys(ENDPOINTS).join(', ')}`,
+        );
         process.exit(1);
     }
 
@@ -81,24 +62,32 @@ async function runBulkApiFetcher() {
         const authToken = await getAuthToken();
         const reqHeaders = {
             Authorization: `Bearer ${authToken}`,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
         };
 
-        const outputDir = CUSTOM_OUT_DIR 
-            ? path.join(CUSTOM_OUT_DIR, TARGET_TYPE) 
+        const outputDir = CUSTOM_OUT_DIR
+            ? path.join(CUSTOM_OUT_DIR, TARGET_TYPE)
             : path.join(__dirname, '..', 'sources', 'repositories', TARGET_TYPE);
-            
+
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
         let items = [];
-        console.log(`Starting bulk fetch for: ${TARGET_TYPE.toUpperCase()} (Homebrew: ${INCLUDE_HOMEBREW})`);
+        console.log(
+            `Starting bulk fetch for: ${TARGET_TYPE.toUpperCase()} (Homebrew: ${INCLUDE_HOMEBREW})`,
+        );
 
         if (TARGET_TYPE === 'monsters') {
-            let skip = 0, take = 100, hasMore = true;
+            let skip = 0,
+                take = 100,
+                hasMore = true;
             const homebrewFlag = INCLUDE_HOMEBREW ? 't' : 'f';
             while (hasMore) {
                 console.log(`Fetching monsters... (Skip: ${skip})`);
-                const res = await axios.get(`${ENDPOINTS.monsters}?skip=${skip}&take=${take}&showHomebrew=${homebrewFlag}`, { headers: reqHeaders });
+                const res = await axios.get(
+                    `${ENDPOINTS.monsters}?skip=${skip}&take=${take}&showHomebrew=${homebrewFlag}`,
+                    { headers: reqHeaders },
+                );
                 const batch = res.data.data || res.data;
                 if (batch?.length > 0) {
                     items.push(...batch);
@@ -114,28 +103,32 @@ async function runBulkApiFetcher() {
 
             for (const classId of classIds) {
                 try {
-                    let url = TARGET_TYPE === 'spells' 
-                        ? `${ENDPOINTS.spells}?classId=${classId}&classLevel=20${hbParam}`
-                        : `${ENDPOINTS.subclasses}?baseClassId=${classId}${hbParam}`;
-                    
+                    let url =
+                        TARGET_TYPE === 'spells'
+                            ? `${ENDPOINTS.spells}?classId=${classId}&classLevel=20${hbParam}`
+                            : `${ENDPOINTS.subclasses}?baseClassId=${classId}${hbParam}`;
+
                     const res = await axios.get(url, { headers: reqHeaders });
                     if (res.data && res.data.data) {
                         res.data.data.forEach((item) => {
                             const actualItem = item.definition || item;
-                            const key = TARGET_TYPE === 'spells' ? actualItem.name : actualItem.slug;
+                            const key =
+                                TARGET_TYPE === 'spells' ? actualItem.name : actualItem.slug;
                             if (key && !uniqueItems.has(key)) {
                                 uniqueItems.set(key, actualItem);
                             }
                         });
                     }
-                } catch (e) { }
-                await new Promise(r => setTimeout(r, 250)); 
+                } catch (e) {}
+                await new Promise((r) => setTimeout(r, 250));
             }
             items = Array.from(uniqueItems.values());
         } else {
             console.log('Fetching payload...');
             const hbParam = INCLUDE_HOMEBREW ? '?includeCustomItems=true' : '';
-            const res = await axios.get(`${ENDPOINTS[TARGET_TYPE]}${hbParam}`, { headers: reqHeaders });
+            const res = await axios.get(`${ENDPOINTS[TARGET_TYPE]}${hbParam}`, {
+                headers: reqHeaders,
+            });
             items = res.data.data || res.data;
         }
 
@@ -152,9 +145,11 @@ async function runBulkApiFetcher() {
             const safeName = item.name.replace(/[<>:"/\\|?*]+/g, '').trim();
             const slug = item.slug || safeName.toLowerCase().replace(/\s+/g, '-');
             const filePath = path.join(outputDir, `${safeName}.md`);
-            
+
             let metaData = '';
-            let descMarkdown = convertToMarkdown(item.description || item.snippet || item.characteristicsDescription || '');
+            let descMarkdown = convertToMarkdown(
+                item.description || item.snippet || item.characteristicsDescription || '',
+            );
 
             if (item.avatarUrl || item.largeAvatarUrl) {
                 const imgUrl = item.largeAvatarUrl || item.avatarUrl;
@@ -166,37 +161,54 @@ async function runBulkApiFetcher() {
                 const type = getMonsterType(item.typeId);
                 const cr = getChallengeRating(item.challengeRatingId);
 
-                const stats = (item.stats || []).map(s => `**${getStat(s.statId)}:** ${s.value}`).join(' | ');
-                const movements = (item.movements || []).map(m => `${getMovement(m.movementId)} ${m.speed} ft.`).join(', ');
+                const stats = (item.stats || [])
+                    .map((s) => `**${getStat(s.statId)}:** ${s.value}`)
+                    .join(' | ');
+                const movements = (item.movements || [])
+                    .map((m) => `${getMovement(m.movementId)} ${m.speed} ft.`)
+                    .join(', ');
 
                 metaData += `*${size} ${type}*\n\n**AC:** ${item.armorClass} | **HP:** ${item.averageHitPoints} | **CR:** ${cr}\n**Speed:** ${movements}\n\n${stats}\n\n`;
 
-                if (item.specialTraitsDescription) descMarkdown += `\n\n### Special Traits {#${TARGET_TYPE}:${slug}:traits}\n${convertToMarkdown(item.specialTraitsDescription)}`;
+                if (item.specialTraitsDescription)
+                    descMarkdown += `\n\n### Special Traits {#${TARGET_TYPE}:${slug}:traits}\n${convertToMarkdown(item.specialTraitsDescription)}`;
                 descMarkdown += `\n\n### Actions {#${TARGET_TYPE}:${slug}:actions}\n${convertToMarkdown(item.actionsDescription)}`;
-                if (item.bonusActionsDescription) descMarkdown += `\n\n### Bonus Actions {#${TARGET_TYPE}:${slug}:bonus-actions}\n${convertToMarkdown(item.bonusActionsDescription)}`;
-                if (item.reactionsDescription) descMarkdown += `\n\n### Reactions {#${TARGET_TYPE}:${slug}:reactions}\n${convertToMarkdown(item.reactionsDescription)}`;
-                if (item.legendaryActionsDescription) descMarkdown += `\n\n### Legendary Actions {#${TARGET_TYPE}:${slug}:legendary-actions}\n${convertToMarkdown(item.legendaryActionsDescription)}`;
+                if (item.bonusActionsDescription)
+                    descMarkdown += `\n\n### Bonus Actions {#${TARGET_TYPE}:${slug}:bonus-actions}\n${convertToMarkdown(item.bonusActionsDescription)}`;
+                if (item.reactionsDescription)
+                    descMarkdown += `\n\n### Reactions {#${TARGET_TYPE}:${slug}:reactions}\n${convertToMarkdown(item.reactionsDescription)}`;
+                if (item.legendaryActionsDescription)
+                    descMarkdown += `\n\n### Legendary Actions {#${TARGET_TYPE}:${slug}:legendary-actions}\n${convertToMarkdown(item.legendaryActionsDescription)}`;
             } else if (TARGET_TYPE === 'spells') {
                 const levelStr = item.level === 0 ? 'Cantrip' : `Level ${item.level}`;
                 const ritualStr = item.ritual ? ' (Ritual)' : '';
                 const actTime = item.activation?.activationTime || '';
-                let actType = ['Action','','Bonus Action','Reaction','','Minute(s)','Hour(s)'][item.activation?.activationType] || 'Action';
-                
+                let actType =
+                    ['Action', '', 'Bonus Action', 'Reaction', '', 'Minute(s)', 'Hour(s)'][
+                        item.activation?.activationType
+                    ] || 'Action';
+
                 if (actTime === 1) actType = actType.replace('(s)', '');
                 else actType = actType.replace('(s)', 's');
 
                 let rangeStr = item.range?.origin || 'Self';
                 if (item.range?.rangeValue) rangeStr += ` (${item.range.rangeValue} ft.)`;
 
-                const comps = (item.components || []).map(c => ['V','S','M'][c-1] || c).join(', ');
-                const compDesc = item.componentsDescription ? ` (${item.componentsDescription})` : '';
+                const comps = (item.components || [])
+                    .map((c) => ['V', 'S', 'M'][c - 1] || c)
+                    .join(', ');
+                const compDesc = item.componentsDescription
+                    ? ` (${item.componentsDescription})`
+                    : '';
 
                 let durationStr = item.duration?.durationType || 'Instantaneous';
                 if (item.duration?.durationInterval) {
                     let durUnit = item.duration.durationUnit || '';
-                    if (item.duration.durationInterval > 1 && !durUnit.endsWith('s')) durUnit += 's';
+                    if (item.duration.durationInterval > 1 && !durUnit.endsWith('s'))
+                        durUnit += 's';
                     durationStr = `${item.duration.durationInterval} ${durUnit}`;
-                    if (item.duration.durationType === 'Concentration') durationStr = `Concentration, up to ${durationStr}`;
+                    if (item.duration.durationType === 'Concentration')
+                        durationStr = `Concentration, up to ${durationStr}`;
                 }
 
                 metaData += `*${levelStr} ${item.school}${ritualStr}*\n\n**Casting Time:** ${actTime} ${actType}\n**Range:** ${rangeStr}\n**Components:** ${comps}${compDesc}\n**Duration:** ${durationStr}\n\n`;

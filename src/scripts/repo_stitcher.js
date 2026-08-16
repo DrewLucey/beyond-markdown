@@ -4,14 +4,13 @@
  * dynamically grouping outputs by the ruleset defined in their XML metadata.
  */
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
-import readline from 'readline';
+import { getDirname } from '../utils/paths.js';
+import { askQuestion } from '../utils/cli.js';
 
 const require = createRequire(import.meta.url);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = getDirname(import.meta.url);
 
 const TARGET_REPO = process.argv[2] || 'spells';
 const sourceDir = path.resolve(__dirname, '../sources/repositories', TARGET_REPO);
@@ -22,19 +21,9 @@ const formattedTitle = TARGET_REPO.split(/[-_]/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 
-function askQuestion(query) {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-    });
-    return new Promise((resolve) =>
-        rl.question(query, (ans) => {
-            rl.close();
-            resolve(ans);
-        }),
-    );
-}
-
+/**
+ * Assembles atomic Markdown files into a macro-level repository.
+ */
 async function runRepoStitcher() {
     try {
         console.log(`--- Starting Repository Stitcher for: ${formattedTitle.toUpperCase()} ---`);

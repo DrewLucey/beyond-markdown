@@ -4,59 +4,16 @@
  * Supports paginated and non-paginated D&D Beyond API endpoints.
  */
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
-import 'dotenv/config';
-import TurndownService from 'turndown';
-import { gfm } from 'turndown-plugin-gfm';
 import * as prettier from 'prettier';
+import { getDirname } from '../utils/paths.js';
+import { getAuthToken } from '../utils/auth.js';
+import { convertToMarkdown } from '../utils/markdown.js';
 
 const require = createRequire(import.meta.url);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// 1. Load Configuration
-const configPath = path.resolve(__dirname, '../config.cjs');
-let config = {};
-try {
-    config = require(configPath);
-} catch (e) {
-    console.error('Config missing, falling back to process.env');
-}
-
-const cobaltSession = process.env.COBALTSESSION || config.cobaltSession || '';
-
-const turndownService = new TurndownService({
-    headingStyle: 'atx',
-    codeBlockStyle: 'fenced',
-});
-turndownService.use(gfm);
-
-// Double-Tilde Override for Strikethroughs
-turndownService.addRule('strikethrough', {
-    filter: ['del', 's', 'strike'],
-    replacement: function (content) {
-        return '~~' + content + '~~';
-    },
-});
-
-// --- RESTORED AUTHENTICATION ROUTINE ---
-async function getAuthToken() {
-    console.log('Authenticating with D&D Beyond Auth Service...');
-    if (!cobaltSession) throw new Error('Missing COBALTSESSION in .env or config.cjs');
-
-    try {
-        const res = await axios.post('https://auth-service.dndbeyond.com/v1/cobalt-token', null, {
-            headers: { Cookie: `CobaltSession=${cobaltSession}` },
-        });
-        console.log('✅ Authentication Successful.');
-        return res.data.token;
-    } catch (err) {
-        throw new Error(`Authentication Failed: ${err.message}`);
-    }
-}
+const __dirname = getDirname(import.meta.url);
 
 const ENDPOINTS = {
     classes:
@@ -73,19 +30,23 @@ const ENDPOINTS = {
 
 const TARGET_TYPE = process.argv[2] || 'items'; // Default to items if no argument provided
 
-// Translation Utility
+/**
+ * Utility to translate a configuration ID to its string name.
+ * @param {Array} configArray - The D&D Beyond configuration dictionary array
+ * @param {number|string} id - The ID to look up
+ * @returns {string} The translated string name or the original ID
+ */
 function translateId(configArray, id) {
     if (!configArray || !Array.isArray(configArray)) return id;
     const found = configArray.find((item) => item.id === id);
     return found ? found.name : id;
 }
 
-function convertToMarkdown(html) {
-    if (!html) return '';
-    let markdown = turndownService.turndown(html.replace(/&nbsp;|\u00A0/g, ' '));
-    return markdown.replace(/^[\s\u00A0\uFEFF\xA0]+/, '');
-}
-
+/**
+ * Formats a JSON object for readability.
+ * @param {Object} json - The raw JSON data
+ * @returns {Promise<string>} The formatted JSON string
+ */
 async function formatJson(json) {
     try {
         const formatted = await prettier.format(JSON.stringify(json), {
@@ -98,6 +59,10 @@ async function formatJson(json) {
     }
 }
 
+/**
+ * Main execution flow: Authenticates, fetches API payloads based on TARGET_TYPE,
+ * unwraps standard D&D Beyond API definitions, and writes Markdown & JSON artifacts.
+ */
 async function runApiFetcher() {
     if (!TARGET_TYPE || !ENDPOINTS[TARGET_TYPE]) {
         console.error(

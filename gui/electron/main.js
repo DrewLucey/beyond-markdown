@@ -9,7 +9,10 @@ const loadURL = serve({ directory: path.join(__dirname, '../out') });
 let mainWindow;
 
 async function getEnvWithToken() {
-    const cookies = await session.defaultSession.cookies.get({ url: 'https://auth-service.dndbeyond.com', name: 'CobaltSession' });
+    const cookies = await session.defaultSession.cookies.get({
+        url: 'https://auth-service.dndbeyond.com',
+        name: 'CobaltSession',
+    });
     const cobaltSession = cookies.length > 0 ? cookies[0].value : '';
     return { ...process.env, COBALTSESSION: cobaltSession };
 }
@@ -26,8 +29,8 @@ function createWindow() {
         titleBarStyle: 'hidden',
         titleBarOverlay: {
             color: '#1e1e1e',
-            symbolColor: '#ffffff'
-        }
+            symbolColor: '#ffffff',
+        },
     });
 
     const isDev = process.argv.includes('--dev');
@@ -72,12 +75,12 @@ app.on('window-all-closed', () => {
 ipcMain.handle('get-sources', async () => {
     try {
         const mapPath = path.join(__dirname, '../../src/sources/ruleset_map.json');
-        console.log("Reading ruleset_map from:", mapPath);
+        console.log('Reading ruleset_map from:', mapPath);
         const data = fs.readFileSync(mapPath, 'utf-8');
-        console.log("Successfully read ruleset_map, size:", data.length);
+        console.log('Successfully read ruleset_map, size:', data.length);
         return JSON.parse(data);
     } catch (e) {
-        console.error("Failed to read ruleset_map.json:", e);
+        console.error('Failed to read ruleset_map.json:', e);
         return null;
     }
 });
@@ -89,15 +92,15 @@ ipcMain.handle('refresh-library', async () => {
         const scriptPath = path.join(__dirname, '../../src/scripts/library.js');
         const child = spawn('node', [scriptPath], {
             cwd: path.join(__dirname, '../../'),
-            env
+            env,
         });
 
         let output = '';
-        child.stdout.on('data', (data) => output += data.toString());
-        child.stderr.on('data', (data) => output += data.toString());
+        child.stdout.on('data', (data) => (output += data.toString()));
+        child.stderr.on('data', (data) => (output += data.toString()));
 
         child.on('close', (code) => {
-            console.log("Refresh Library script finished with code", code);
+            console.log('Refresh Library script finished with code', code);
             console.log(output);
             resolve({ success: code === 0 });
         });
@@ -105,14 +108,55 @@ ipcMain.handle('refresh-library', async () => {
 });
 // IPC: Get extraction history
 ipcMain.handle('get-history', async () => {
+    const historyPath = path.join(app.getPath('userData'), 'history.json');
     try {
-        const historyPath = path.join(app.getPath('userData'), 'history.json');
         if (fs.existsSync(historyPath)) {
-            return JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
+            return JSON.parse(fs.readFileSync(historyPath, 'utf8'));
         }
         return {};
     } catch (e) {
+        console.error('Failed to read history', e);
         return {};
+    }
+});
+
+// IPC: Clear extraction history
+ipcMain.handle('clear-history', async () => {
+    const historyPath = path.join(app.getPath('userData'), 'history.json');
+    try {
+        if (fs.existsSync(historyPath)) {
+            fs.unlinkSync(historyPath);
+        }
+        return true;
+    } catch (e) {
+        console.error('Failed to clear history', e);
+        return false;
+    }
+});
+
+// IPC: Get SCHEMA.md content
+ipcMain.handle('get-schema-content', async () => {
+    const schemaPath = path.join(__dirname, '../../SCHEMA.md');
+    try {
+        if (fs.existsSync(schemaPath)) {
+            return fs.readFileSync(schemaPath, 'utf-8');
+        }
+        return '# SCHEMA.md not found';
+    } catch (e) {
+        console.error('Failed to read schema', e);
+        return '# Error reading schema';
+    }
+});
+
+// IPC: Resolve relative paths safely
+ipcMain.handle('resolve-path', async (event, basePath, relativePath) => {
+    try {
+        if (!basePath || basePath === 'SCHEMA.md') return null;
+        const dir = path.dirname(basePath);
+        return path.resolve(dir, relativePath);
+    } catch (e) {
+        console.error('Failed to resolve path', e);
+        return null;
     }
 });
 // IPC: Show Save Dialog
@@ -120,7 +164,7 @@ ipcMain.handle('show-save-dialog', async (event, defaultName) => {
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
         title: 'Save Markdown Extraction',
         defaultPath: defaultName,
-        filters: [{ name: 'Markdown Files', extensions: ['md'] }]
+        filters: [{ name: 'Markdown Files', extensions: ['md'] }],
     });
     return canceled ? null : filePath;
 });
@@ -129,7 +173,7 @@ ipcMain.handle('show-save-dialog', async (event, defaultName) => {
 ipcMain.handle('show-directory-dialog', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
         title: 'Select Output Directory',
-        properties: ['openDirectory']
+        properties: ['openDirectory'],
     });
     return canceled ? null : filePaths[0];
 });
@@ -139,18 +183,22 @@ ipcMain.handle('start-extraction-sourcebook', async (event, slug, outputPath) =>
     return new Promise(async (resolve) => {
         const extractScript = path.join(__dirname, '../../src/scripts/extract.js');
         const env = await getEnvWithToken();
-        
+
         const child = spawn('node', [extractScript, slug], {
             cwd: path.join(__dirname, '../../'),
-            env
+            env,
         });
 
-        child.stdout.on('data', (data) => mainWindow.webContents.send('extraction-log', data.toString()));
-        child.stderr.on('data', (data) => mainWindow.webContents.send('extraction-log', data.toString()));
+        child.stdout.on('data', (data) =>
+            mainWindow.webContents.send('extraction-log', data.toString()),
+        );
+        child.stderr.on('data', (data) =>
+            mainWindow.webContents.send('extraction-log', data.toString()),
+        );
 
         child.on('close', (code) => {
             if (code !== 0) return resolve({ success: false });
-            
+
             // Run stitcher.js
             const stitcherScript = path.join(__dirname, '../../src/scripts/stitcher.js');
             const stitcherArgs = [stitcherScript, slug];
@@ -158,11 +206,15 @@ ipcMain.handle('start-extraction-sourcebook', async (event, slug, outputPath) =>
 
             const stitcherChild = spawn('node', stitcherArgs, {
                 cwd: path.join(__dirname, '../../'),
-                env
+                env,
             });
 
-            stitcherChild.stdout.on('data', (data) => mainWindow.webContents.send('extraction-log', data.toString()));
-            stitcherChild.stderr.on('data', (data) => mainWindow.webContents.send('extraction-log', data.toString()));
+            stitcherChild.stdout.on('data', (data) =>
+                mainWindow.webContents.send('extraction-log', data.toString()),
+            );
+            stitcherChild.stderr.on('data', (data) =>
+                mainWindow.webContents.send('extraction-log', data.toString()),
+            );
 
             stitcherChild.on('close', (stitchCode) => {
                 if (stitchCode === 0 && outputPath) {
@@ -184,37 +236,72 @@ ipcMain.handle('start-extraction-sourcebook', async (event, slug, outputPath) =>
 // IPC: Start Rules Extraction
 ipcMain.handle('start-extraction-rules', async (event, category, includeHomebrew, outputPath) => {
     return new Promise(async (resolve) => {
-        const scriptPath = path.join(__dirname, '../../src/scripts/bulk_api_fetcher.js');
-        const args = [scriptPath, category];
-        if (includeHomebrew) args.push('--homebrew');
+        const useScraper = category === 'magic-items' || category === 'items' || category === 'equipment';
+        const scriptPath = useScraper
+            ? path.join(__dirname, '../../src/scripts/bulk_muncher.js')
+            : path.join(__dirname, '../../src/scripts/bulk_api_fetcher.js');
+        
+        let scrapeArg = category;
+        if (useScraper) {
+            scrapeArg = category === 'items' ? '/equipment' : `/${category}`;
+        }
+        
+        const args = useScraper ? [scriptPath, scrapeArg] : [scriptPath, category];
+        
+        if (includeHomebrew && !useScraper) args.push('--homebrew');
         if (outputPath) {
-            args.push('--out');
+            if (!useScraper) args.push('--out');
             args.push(outputPath);
         }
         const env = await getEnvWithToken();
         const child = spawn('node', args, {
             cwd: path.join(__dirname, '../../'),
-            env
+            env,
         });
 
-        child.stdout.on('data', (data) => mainWindow.webContents.send('extraction-log', data.toString()));
-        child.stderr.on('data', (data) => mainWindow.webContents.send('extraction-log', data.toString()));
+        child.stdout.on('data', (data) =>
+            mainWindow.webContents.send('extraction-log', data.toString()),
+        );
+        child.stderr.on('data', (data) =>
+            mainWindow.webContents.send('extraction-log', data.toString()),
+        );
 
         child.on('close', (code) => {
-            if (code === 0 && outputPath) {
-                try {
-                    const historyPath = path.join(app.getPath('userData'), 'history.json');
-                    let history = {};
-                    if (fs.existsSync(historyPath)) {
-                        history = JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
+            if (code !== 0) return resolve({ success: false });
+
+            // Run compendium_stitcher.js
+            const stitcherScript = path.join(__dirname, '../../src/scripts/compendium_stitcher.js');
+            const stitcherArgs = [stitcherScript, category];
+            if (outputPath && !useScraper) stitcherArgs.push(outputPath);
+
+            const stitcherChild = spawn('node', stitcherArgs, {
+                cwd: path.join(__dirname, '../../'),
+                env,
+            });
+
+            stitcherChild.stdout.on('data', (data) =>
+                mainWindow.webContents.send('extraction-log', data.toString()),
+            );
+            stitcherChild.stderr.on('data', (data) =>
+                mainWindow.webContents.send('extraction-log', data.toString()),
+            );
+
+            stitcherChild.on('close', (stitchCode) => {
+                if (stitchCode === 0 && outputPath) {
+                    try {
+                        const historyPath = path.join(app.getPath('userData'), 'history.json');
+                        let history = {};
+                        if (fs.existsSync(historyPath)) {
+                            history = JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
+                        }
+                        history[category] = new Date().toISOString();
+                        fs.writeFileSync(historyPath, JSON.stringify(history, null, 2));
+                    } catch (e) {
+                        console.error('Failed to write history for rule extraction', e);
                     }
-                    history[category] = new Date().toISOString();
-                    fs.writeFileSync(historyPath, JSON.stringify(history, null, 2));
-                } catch (e) {
-                    console.error("Failed to write history for rule extraction", e);
                 }
-            }
-            resolve({ success: code === 0 });
+                resolve({ success: stitchCode === 0 });
+            });
         });
     });
 });
@@ -235,10 +322,10 @@ ipcMain.handle('check-auth', async () => {
             try {
                 const config = require(path.join(__dirname, '../../config.cjs'));
                 cobalt = config.cobaltSession || config.DNDBEYOND_COBALT_SESSION || '';
-            } catch(e) {}
+            } catch (e) {}
         }
 
-        if (!cobalt) return { success: false, message: "No token found" };
+        if (!cobalt) return { success: false, message: 'No token found' };
 
         // Test the token
         const axios = require('axios');
@@ -247,20 +334,22 @@ ipcMain.handle('check-auth', async () => {
         });
 
         if (res.data && res.data.token) {
-            let username = "Signed In";
+            let username = 'Signed In';
             try {
-                const payloadStr = Buffer.from(res.data.token.split('.')[1], 'base64').toString('utf-8');
+                const payloadStr = Buffer.from(res.data.token.split('.')[1], 'base64').toString(
+                    'utf-8',
+                );
                 const payload = JSON.parse(payloadStr);
                 if (payload.displayName) {
                     username = payload.displayName;
                 }
-            } catch(e) {}
+            } catch (e) {}
             return { success: true, message: username };
         }
-        return { success: false, message: "Token invalid" };
+        return { success: false, message: 'Token invalid' };
     } catch (e) {
-        console.error("Auth test failed:", e.message);
-        return { success: false, message: "Authentication failed" };
+        console.error('Auth test failed:', e.message);
+        return { success: false, message: 'Authentication failed' };
     }
 });
 
@@ -270,15 +359,17 @@ ipcMain.handle('auth-cobalt', async () => {
         let authWindow = new BrowserWindow({
             width: 600,
             height: 800,
-            webPreferences: { nodeIntegration: false }
+            webPreferences: { nodeIntegration: false },
         });
 
         authWindow.loadURL('https://www.dndbeyond.com/login');
 
         authWindow.webContents.on('did-navigate', async () => {
-            const cookies = await session.defaultSession.cookies.get({ url: 'https://www.dndbeyond.com' });
-            const cobalt = cookies.find(c => c.name === 'CobaltSession');
-            
+            const cookies = await session.defaultSession.cookies.get({
+                url: 'https://www.dndbeyond.com',
+            });
+            const cobalt = cookies.find((c) => c.name === 'CobaltSession');
+
             if (cobalt) {
                 // Save to .env
                 const envPath = path.join(__dirname, '../../.env');
@@ -289,9 +380,9 @@ ipcMain.handle('auth-cobalt', async () => {
                 }
                 envContent += `\nCOBALT_SESSION=${cobalt.value}\n`;
                 fs.writeFileSync(envPath, envContent.trim() + '\n');
-                
+
                 authWindow.close();
-                resolve({ success: true, message: "CobaltSession acquired successfully!" });
+                resolve({ success: true, message: 'CobaltSession acquired successfully!' });
             }
         });
     });
@@ -312,7 +403,7 @@ ipcMain.handle('sign-out', async () => {
         }
         await session.defaultSession.clearStorageData({ storages: ['cookies'] });
         return { success: true };
-    } catch(e) {
+    } catch (e) {
         return { success: false };
     }
 });
@@ -323,8 +414,8 @@ ipcMain.handle('read-file', async (event, filePath) => {
         if (fs.existsSync(filePath)) {
             return fs.readFileSync(filePath, 'utf-8');
         }
-    } catch(e) {
-        console.error("Failed to read file", e);
+    } catch (e) {
+        console.error('Failed to read file', e);
     }
     return null;
 });
@@ -344,8 +435,8 @@ ipcMain.handle('read-markdown-header', async (event, filePath) => {
                 return match[1];
             }
         }
-    } catch(e) {
-        console.error("Failed to read markdown header", e);
+    } catch (e) {
+        console.error('Failed to read markdown header', e);
     }
     return null;
 });
@@ -357,11 +448,15 @@ ipcMain.handle('convert-local-file', async (event, filePath, targetRuleset, outp
         const scriptPath = path.join(__dirname, '../../src/scripts/file_converter.js');
         const child = spawn('node', [scriptPath, filePath, targetRuleset, outputPath], {
             cwd: path.join(__dirname, '../../'),
-            env
+            env,
         });
 
-        child.stdout.on('data', (data) => mainWindow.webContents.send('extraction-log', data.toString()));
-        child.stderr.on('data', (data) => mainWindow.webContents.send('extraction-log', data.toString()));
+        child.stdout.on('data', (data) =>
+            mainWindow.webContents.send('extraction-log', data.toString()),
+        );
+        child.stderr.on('data', (data) =>
+            mainWindow.webContents.send('extraction-log', data.toString()),
+        );
 
         child.on('close', (code) => {
             resolve({ success: code === 0 });
@@ -372,7 +467,10 @@ ipcMain.handle('convert-local-file', async (event, filePath, targetRuleset, outp
 // IPC: Open in Browser
 ipcMain.handle('open-in-browser', async (event, markdown, title) => {
     try {
-        const tempPath = path.join(app.getPath('temp'), `beyond-markdown-viewer-${Date.now()}.html`);
+        const tempPath = path.join(
+            app.getPath('temp'),
+            `beyond-markdown-viewer-${Date.now()}.html`,
+        );
         const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -414,8 +512,8 @@ ipcMain.handle('open-in-browser', async (event, markdown, title) => {
         fs.writeFileSync(tempPath, html, 'utf-8');
         await shell.openExternal('file:///' + tempPath.replace(/\\/g, '/'));
         return { success: true };
-    } catch(e) {
-        console.error("Failed to open in browser", e);
+    } catch (e) {
+        console.error('Failed to open in browser', e);
         return { success: false };
     }
 });

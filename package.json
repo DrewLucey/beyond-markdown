@@ -4,6 +4,9 @@
   "description": "D&D Beyond Public and Owned content to LLM/AI Optimized Markdown",
   "main": "index.js",
   "type": "module",
+  "workspaces": [
+    "gui"
+  ],
   "scripts": {
     "beyond-markdown": "node index.js",
     "library": "node src/scripts/library.js",

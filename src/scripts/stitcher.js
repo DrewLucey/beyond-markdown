@@ -4,15 +4,14 @@
  * Final: AI Context Namespaces, DDB Tooltip References, & Self-Healing Anchor Casing
  */
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import * as cheerio from 'cheerio';
 import { marked } from 'marked';
+import { getDirname } from '../utils/paths.js';
 
 const require = createRequire(import.meta.url);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = getDirname(import.meta.url);
 
 const TARGET_BOOK = process.argv[2];
 if (!TARGET_BOOK) {
@@ -345,6 +344,9 @@ function transformMarkdownLinks(
     });
 }
 
+/**
+ * Assembles atomic Markdown files into a macro-level sourcebook based on the index.
+ */
 async function runStitcher() {
     try {
         const outputFolder = path.dirname(outputFile);
@@ -373,9 +375,12 @@ async function runStitcher() {
 
             let chapterText = fs.readFileSync(filePath, 'utf-8');
             const chapterSlug = slug.replace('.md', '');
-            
+
             // Strip atomic ENTRY wrappers so they don't corrupt the master SOURCEBOOK/CHAPTER xml structure
-            chapterText = chapterText.replace(/<ENTRY[^>]*>/g, '').replace(/<\/ENTRY>/g, '').trim();
+            chapterText = chapterText
+                .replace(/<ENTRY[^>]*>/g, '')
+                .replace(/<\/ENTRY>/g, '')
+                .trim();
 
             // NEW: Build hierarchical breadcrumb IDs exclusively for the Table of Contents (Index)
             if (chapterSlug.toLowerCase() === 'index') {

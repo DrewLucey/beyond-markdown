@@ -3,21 +3,18 @@
  * Handles paginated listings and wraps items for the central Repository Stitcher.
  */
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import TurndownService from 'turndown';
-import { gfm } from 'turndown-plugin-gfm';
-import { processContent } from './js/handlers.js';
+import { processContent } from '../core/handlers.js';
+import { getDirname } from '../utils/paths.js';
+import { createTurndownService } from '../utils/markdown.js';
 
 const require = createRequire(import.meta.url);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = getDirname(import.meta.url);
 
-const configPath = path.resolve(__dirname, '../config.cjs');
-const config = require(configPath);
+import { getRawCobaltSession } from '../utils/auth.js';
 
 const mapFilePath = path.resolve(__dirname, '../sources/ruleset_map.json');
 let rulesMap = {};
@@ -29,20 +26,7 @@ if (fs.existsSync(mapFilePath)) {
     }
 }
 
-const turndownService = new TurndownService({
-    headingStyle: 'atx',
-    codeBlockStyle: 'fenced',
-});
-turndownService.use(gfm);
-
-// --- ADDED ENHANCEMENTS: Turndown Rules ---
-// FORCE DOUBLE-TILDE STRIKETHROUGH
-turndownService.addRule('strikethrough', {
-    filter: ['del', 's', 'strike'],
-    replacement: function (content) {
-        return '~~' + content + '~~';
-    },
-});
+const turndownService = createTurndownService();
 
 // Rule: Capture Heading IDs (Sync with extract.js)
 turndownService.addRule('headingIds', {
@@ -72,6 +56,7 @@ turndownService.addRule('blockquotes', {
 });
 
 const TARGET_DIR = process.argv[2] || '/spells';
+const CUSTOM_OUT_DIR = process.argv[3] || null;
 const BASE_URL = 'https://www.dndbeyond.com';
 
 const CATEGORY_MAP = {
@@ -83,10 +68,15 @@ const CATEGORY_MAP = {
     '/classes': 'CLASS',
 };
 
+/**
+ * Handles paginated listings and wraps items for the central Repository Stitcher.
+ */
 async function runBulkMuncher() {
     const category = CATEGORY_MAP[TARGET_DIR] || 'GENERAL';
     const folderName = TARGET_DIR.replace(/\//g, '');
-    const outputDir = path.resolve(__dirname, '../sources/repositories', folderName);
+    const outputDir = CUSTOM_OUT_DIR
+        ? path.join(CUSTOM_OUT_DIR, folderName)
+        : path.resolve(__dirname, '../sources/repositories', folderName);
 
     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
@@ -103,7 +93,7 @@ async function runBulkMuncher() {
         try {
             const listUrl = `${BASE_URL}${TARGET_DIR}?filter-partnered-content=t&page=${currentPage}`;
             const response = await axios.get(listUrl, {
-                headers: { Cookie: `CobaltSession=${config.cobaltSession}` },
+                headers: { Cookie: `CobaltSession=${getRawCobaltSession()}` },
             });
 
             // FIX: Prevent silent lowercasing of IDs
@@ -174,7 +164,7 @@ async function runBulkMuncher() {
 
         try {
             const itemRes = await axios.get(item.url, {
-                headers: { Cookie: `CobaltSession=${config.cobaltSession}` },
+                headers: { Cookie: `CobaltSession=${getRawCobaltSession()}` },
             });
 
             // Check if DDB secretly redirected us to the marketplace due to lack of ownership

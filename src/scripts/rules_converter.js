@@ -6,15 +6,15 @@
  * Example: node downloader/rules_converter.js cos 5.5e
  */
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
+import { getDirname, getFilename } from '../utils/paths.js';
 
 const require = createRequire(import.meta.url);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filename = getFilename(import.meta.url);
+const __dirname = getDirname(import.meta.url);
 
-const IS_MAIN = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const IS_MAIN = process.argv[1] && __filename === process.argv[1];
 
 let CATEGORY = '';
 let RAW_TARGET = '';
@@ -239,6 +239,9 @@ const CROSS_VERSION_ALIASES = { ...SPELL_ITEM_ALIASES, ...RENAMED_MONSTERS };
 const URN_MAP_2014_TO_2024 = {};
 const URN_MAP_2024_TO_2014 = {};
 
+/**
+ * Builds a dynamic cross-reference URN map.
+ */
 function buildUrnMap() {
     const reposDir = path.resolve(__dirname, '../sources/repositories');
     if (!fs.existsSync(reposDir)) return;
@@ -548,6 +551,9 @@ export function convertWording(text, direction) {
     return result;
 }
 
+/**
+ * Main orchestrator for rule conversion
+ */
 function processConversion() {
     console.log(
         `--- Running Rule Conversion Mapping for ${CATEGORY.toUpperCase()} (${DIRECTION}) ---`,
