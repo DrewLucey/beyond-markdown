@@ -9,4 +9,9 @@
 # User will need to run `npm install` to get the dependencies
 node_modules/
 # Omit Extracted Source Files
-sources/
+src/sources/**/*.md
+src/sources/test_scripts/
+test_*.cjs
+*.md
+# Agent context
+.ai/

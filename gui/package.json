@@ -1,0 +1,33 @@
+{
+  "name": "gui",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "electron": "electron .",
+    "build:electron": "next build && electron .",
+    "dev:electron": "concurrently \"next dev\" \"wait-on http://localhost:3000 && electron . --dev\""
+  },
+  "dependencies": {
+    "axios": "^1.19.0",
+    "electron-serve": "^3.0.1",
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "concurrently": "^10.0.4",
+    "electron": "^43.4.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.0",
+    "tailwindcss": "^4",
+    "wait-on": "^9.1.0"
+  }
+}
